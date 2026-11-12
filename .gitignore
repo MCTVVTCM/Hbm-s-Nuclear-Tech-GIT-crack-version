@@ -32,3 +32,9 @@
 
 # Changelog backup
 /changelog.bak
+
+# editor swap files
+*.kate-swp
+
+# devtools build output
+/devtools/hotswap/classes/

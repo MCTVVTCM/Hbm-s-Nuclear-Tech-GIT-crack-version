@@ -14,6 +14,7 @@ import com.hbm.entity.missile.EntityMissileTier1.*;
 import com.hbm.entity.missile.EntityMissileTier2.*;
 import com.hbm.entity.missile.EntityMissileTier3.*;
 import com.hbm.entity.missile.EntityMissileTier4.*;
+import com.hbm.entity.misc.EntityJindouYun;
 import com.hbm.entity.mob.*;
 import com.hbm.entity.mob.botprime.*;
 import com.hbm.entity.mob.glyphid.*;
@@ -60,6 +61,7 @@ public class EntityMappings {
 		addEntity(EntityMissileMirv.class, "entity_missile_mirv", 1000);
 		addEntity(EntityChopperMine.class, "entity_chopper_mine", 1000);
 		addEntity(EntityCloudFleija.class, "entity_cloud_fleija", 500);
+		addEntity(EntityPortal.class, "entity_portal", 250);
 		addEntity(EntityFalloutRain.class, "entity_fallout", 1000);
 		addEntity(EntityEMPBlast.class, "entity_emp_blast", 1000);
 		addEntity(EntityRubble.class, "entity_rubble", 1000);
@@ -165,6 +167,7 @@ public class EntityMappings {
 
 		addEntity(EntityDisperserCanister.class, "entity_disperser", 250);
 		addEntity(EntityWaypoint.class, "entity_waypoint", 250, false);
+		addEntity(EntityJindouYun.class, "entity_jindouyun", 250); // velocity updates = 其他客户端也看得到它在飞
 
 		addMob(EntityCreeperNuclear.class, "entity_mob_nuclear_creeper", 0x204131, 0x75CE00);
 		addMob(EntityCreeperTainted.class, "entity_mob_tainted_creeper", 0x813b9b, 0xd71fdd);

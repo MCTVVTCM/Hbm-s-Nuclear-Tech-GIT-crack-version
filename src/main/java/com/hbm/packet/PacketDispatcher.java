@@ -41,6 +41,10 @@ public class PacketDispatcher {
 		wrapper.registerMessage(PlayerInformPacket.Handler.class, PlayerInformPacket.class, i++, Side.CLIENT);
 		//Universal keybind packet
 		wrapper.registerMessage(KeybindPacket.Handler.class, KeybindPacket.class, i++, Side.SERVER);
+		//筋斗云的 Ctrl 加速状态
+		wrapper.registerMessage(PacketJindouYunBoost.Handler.class, PacketJindouYunBoost.class, i++, Side.SERVER);
+		//筋斗云的客户端权威位置同步
+		wrapper.registerMessage(PacketJindouYunMove.Handler.class, PacketJindouYunMove.class, i++, Side.SERVER);
 		//Packet to send NBT data from clients to serverside TEs
 		wrapper.registerMessage(NBTControlPacket.Handler.class, NBTControlPacket.class, i++, Side.SERVER);
 		//Packet to send for anvil recipes to be crafted
@@ -66,6 +70,8 @@ public class PacketDispatcher {
 		//Sends custom container-bound payload between client and server, dual-use capable
 		wrapper.registerMessage(ContainerNBTCommsPacket.Handler.class, ContainerNBTCommsPacket.class, i++, Side.CLIENT);
 		wrapper.registerMessage(ContainerNBTCommsPacket.Handler.class, ContainerNBTCommsPacket.class, i++, Side.SERVER);
+		//Periodic server mspt/tps readout for the tab list overlay
+		wrapper.registerMessage(PacketServerStats.Handler.class, PacketServerStats.class, i++, Side.CLIENT);
 	}
 
 }

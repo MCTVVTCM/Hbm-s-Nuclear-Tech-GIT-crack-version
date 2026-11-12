@@ -4,6 +4,7 @@ import java.lang.reflect.Method;
 import java.util.List;
 
 import com.hbm.config.ServerConfig;
+import com.hbm.entity.misc.EntityJindouYun;
 
 import cpw.mods.fml.relauncher.ReflectionHelper;
 import net.minecraft.enchantment.EnchantmentHelper;
@@ -56,6 +57,12 @@ public class EntityDamageUtil {
 	}
 	
 	private static boolean attackEntityFromNTInternal(EntityLivingBase living, DamageSource source, float amount, boolean ignoreIFrame, boolean allowSpecialCancel, double knockbackMultiplier) {
+
+		// 骑筋斗云时免疫 HBM 的所有伤害。必须拦在这里：这条链路在 allowSpecialCancel=false 时
+		// 会无视 LivingAttackEvent 的取消（轨道激光的 EntityProcessorCrossSmooth 就是 false），
+		// 光靠事件监听挡不住。
+		if(living.ridingEntity instanceof EntityJindouYun) return false;
+
 		boolean superCompatibility = ServerConfig.DAMAGE_COMPATIBILITY_MODE.get();
 		return superCompatibility
 				? attackEntitySuperCompatibility(living, source, amount, ignoreIFrame, allowSpecialCancel, knockbackMultiplier)
@@ -233,6 +240,8 @@ public class EntityDamageUtil {
 
 	/** Currently just a copy of the vanilla damage code */
 	@Deprecated public static boolean attackEntityFromNT(EntityLivingBase living, DamageSource source, float amount) {
+
+		if(living.ridingEntity instanceof EntityJindouYun) return false;
 
 		if(ForgeHooks.onLivingAttack(living, source, amount))
 			return false;

@@ -12,7 +12,9 @@ buildscript {
 		mavenCentral()
 	}
 	dependencies {
-		classpath ('com.anatawa12.forge:ForgeGradle:1.2-1.0.+') {changing = true}
+		// 原来这里是动态版本 1.2-1.0.+ + changing=true：每次构建都要联网校验，
+		// 网络/代理抖动时会在配置阶段卡死。这里固定成本地缓存里的版本。
+		classpath 'com.anatawa12.forge:ForgeGradle:1.2-1.0.12'
 	}
 }
 
@@ -145,6 +147,9 @@ processResources {
 jar {
     manifest {
         attributes 'FMLAT': 'HBM_at.cfg'
+        // coremod：把区块包的 zlib 压缩级别从 6 降到 1（纯网络优化，见 ChunkPacketTransformer）
+        attributes 'FMLCorePlugin': 'com.hbm.core.HbmCorePlugin'
+        attributes 'FMLCorePluginContainsFMLMod': 'true'
     }
 }
 
@@ -246,4 +251,93 @@ static def parseConfig(File config) {
 		prop.load(it)
 		return (new ConfigSlurper().parse(prop))
 	}
+}
+
+// ---------------------------------------------------------------------------
+// 开发运行任务：默认用 TravaJDK 8 DCEVM 启动，便于 IDEA 热替换（增删方法/字段）
+//
+//   ./gradlew runClient --offline                     # 普通启动
+//   ./gradlew runClient --offline -PdebugPort=5005    # 额外开 JDWP，IDEA: Run > Attach to Process
+//   ./gradlew runClient --offline -Pxmx=6G            # 加大堆
+//
+// 以前这些只写在 devtools/hotreload.gradle（init script）里，必须带 -I 才生效；
+// 现在直接写进 build.gradle，任何方式的 runClient 都走同一套配置。
+// ---------------------------------------------------------------------------
+def dcevmJavaPath = project.findProperty('dcevmJava') ?:
+        System.getenv('DCEVM_JAVA') ?: "${System.getProperty('user.home')}/.jdks/trava-jdk-8-dcevm-8u282/bin/java"
+
+['runClient', 'runServer'].each { taskName ->
+    def exec = tasks.findByName(taskName)
+    if(exec == null) return
+
+    boolean useDcevm = new File(dcevmJavaPath).canExecute()
+
+    if(useDcevm) {
+        exec.executable = dcevmJavaPath
+        logger.lifecycle("[hotreload] ${taskName}: JVM = ${dcevmJavaPath} (DCEVM)")
+    } else {
+        logger.lifecycle("[hotreload] ${taskName}: 未找到 DCEVM，用默认 JVM（只能改方法体）")
+    }
+
+    exec.jvmArgs '-Dfile.encoding=UTF-8',
+                 '-Dfml.ignoreInvalidMinecraftCertificates=true',
+                 '-Dfml.ignorePatchDiscrepancies=true',
+                 '-Dorg.lwjgl.util.NoChecks=true',
+                 // 开发环境不走 jar 的 MANIFEST，必须显式声明 coremod 才会被加载
+                 '-Dfml.coreMods.load=com.hbm.core.HbmCorePlugin',
+                 // 本地单人：区块包完全不压缩（配合 eclipse/server.properties 里的
+                 // network-compression-threshold=-1）。联机服务器不要带这个参数。
+                 '-Dhbm.chunk.deflate=0'
+
+    // 把 -Phbm.prof.tag=... / -Phbm.bench.auto=... 转发成游戏进程的 -D，供测试/统计代码读取
+    ['hbm.prof.tag', 'hbm.bench.auto', 'hbm.bench.offset', 'hbm.bench.delay', 'hbm.bench.world', 'hbm.bench.cmd', 'hbm.chunk.async', 'hbm.light.budget'].each { key ->
+        def value = project.findProperty(key)
+        if(value != null) {
+            exec.jvmArgs "-D${key}=${value}"
+            logger.lifecycle("[bench] ${taskName}: -D${key}=${value}")
+        }
+    }
+
+    if(project.hasProperty('debugPort')) {
+        exec.jvmArgs "-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=${project.property('debugPort')}"
+        logger.lifecycle("[hotreload] ${taskName}: JDWP 127.0.0.1:${project.property('debugPort')}")
+    }
+
+    // ---- GC 调参 ----
+    // 1.7.10 + 大堆默认的 ParallelGC 会出现秒级 full GC 停顿（"飞着飞着定住 1~3 秒"）。
+    // 但 DCEVM 只支持 Serial / CMS，传 G1 会直接启动失败（Must use the serial or CMS GC in the DCEVM）。
+    // 所以按 JVM 分开配：DCEVM 用 CMS，普通 JDK 用 G1。
+    if(useDcevm) {
+        exec.jvmArgs '-XX:+UseConcMarkSweepGC',
+                     '-XX:+CMSParallelRemarkEnabled',
+                     '-XX:+UseCMSInitiatingOccupancyOnly',
+                     '-XX:CMSInitiatingOccupancyFraction=50',
+                     '-XX:+ExplicitGCInvokesConcurrent',
+                     '-XX:+ParallelRefProcEnabled',
+                     // 新生代固定 1.5G：区块加载会产生大量朝生夕死的对象，
+                     // 默认新生代太小会导致 10 秒 5 次 GC、每次 160ms（实测）。
+                     '-Xmn2048M',
+                     '-XX:SurvivorRatio=8',
+                     '-Xms3G',
+                     // 记录真实 STW 停顿：CMS 的 CollectionTime 含并发阶段，不能当停顿看
+                     '-XX:+PrintGCApplicationStoppedTime',
+                     '-XX:+PrintGCDateStamps',
+                     '-Xloggc:gc.log'
+        logger.lifecycle("[hotreload] ${taskName}: GC = CMS (DCEVM 只支持 Serial/CMS)")
+    } else {
+        exec.jvmArgs '-XX:+UseG1GC',
+                     '-XX:MaxGCPauseMillis=40',
+                     '-XX:+ParallelRefProcEnabled',
+                     '-XX:G1HeapRegionSize=8M',
+                     '-Xmn1536M',
+                     '-Xms2G'
+        logger.lifecycle("[hotreload] ${taskName}: GC = G1 (MaxGCPauseMillis=40)")
+    }
+
+    if(project.hasProperty('xmx')) {
+        exec.maxHeapSize = project.property('xmx').toString()
+        logger.lifecycle("[hotreload] ${taskName}: 堆 = ${exec.maxHeapSize}")
+    } else {
+        exec.maxHeapSize = '6G'
+    }
 }

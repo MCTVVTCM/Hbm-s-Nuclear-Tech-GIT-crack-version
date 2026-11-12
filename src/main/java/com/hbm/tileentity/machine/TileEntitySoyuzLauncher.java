@@ -45,7 +45,8 @@ public class TileEntitySoyuzLauncher extends TileEntityMachineBase implements IS
 	public byte mode;
 	public boolean starting;
 	public int countdown;
-	public static final int maxCount = 600;
+	//before is 600
+	public static final int maxCount = 0;
 	public byte rocketType = -1;
 	
 	private AudioWrapper audio;

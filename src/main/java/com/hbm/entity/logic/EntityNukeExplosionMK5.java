@@ -10,6 +10,7 @@ import com.hbm.config.GeneralConfig;
 import com.hbm.entity.effect.EntityFalloutRain;
 import com.hbm.explosion.ExplosionNukeGeneric;
 import com.hbm.explosion.ExplosionNukeRayBatched;
+import com.hbm.explosion.ExplosionNukeRayParallelized;
 import com.hbm.main.MainRegistry;
 import com.hbm.saveddata.satellites.SatelliteDetector;
 import com.hbm.saveddata.satellites.SatelliteDetector.BurstIntensity;
@@ -18,6 +19,7 @@ import com.hbm.util.ContaminationUtil.ContaminationType;
 import com.hbm.util.ContaminationUtil.HazardType;
 
 import net.minecraft.entity.EntityLivingBase;
+import net.minecraft.entity.item.EntityItem;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.util.AxisAlignedBB;
@@ -67,15 +69,21 @@ public class EntityNukeExplosionMK5 extends EntityExplosionChunkloading {
 			radiate(2_500_000F / (this.ticksExisted * 5 + 1), this.length * 2);
 		}
 
+		// 只在起爆那一 tick 清一次地面上的旧掉落物；之后动物掉的东西要留给玩家
+		if(!worldObj.isRemote && this.ticksExisted == 1) {
+			ExplosionNukeGeneric.clearDroppedItems(this.worldObj, this.posX, this.posY, this.posZ, this.length * 2);
+		}
+
 		ExplosionNukeGeneric.dealDamage(this.worldObj, this.posX, this.posY, this.posZ, this.length * 2);
+
+		// 掉落物单独扫一遍。dealDamage 里虽然有 EntityItem 分支，但它依赖实体列表 + 距离，
+		// 而且 1.7.10 的 setFire 烧不死物品；核爆本体自己按弹坑半径清一次，保证坑里的东西
+		// 不会一次次炸完还留在原地。
+		vaporizeItems(this.length);
 
 		if(explosion == null) {
 			explosionStart = System.currentTimeMillis();
-			//if(BombConfig.explosionAlgorithm == 1 || BombConfig.explosionAlgorithm == 2) {
-			//	explosion = new ExplosionNukeRayParallelized(worldObj, posX, posY, posZ, strength, speed, length);
-			//} else {
-				explosion = new ExplosionNukeRayBatched(worldObj, (int) posX, (int) posY, (int) posZ, strength, speed, length);
-			//}
+			explosion = createExplosion();
 			
 			SatelliteDetector.reportEvent(worldObj, SatelliteDetector.DURATION_HIGH, BurstIntensity.HIGH, posX, posZ);
 		}
@@ -96,6 +104,41 @@ public class EntityNukeExplosionMK5 extends EntityExplosionChunkloading {
 			}
 			this.clearChunkLoader();
 			this.setDead();
+		}
+	}
+
+	/**
+	 * 按 BombConfig.explosionAlgorithm 选择实现：
+	 * 0 = 旧的逐 tick 螺旋射线（主线程），1 = 多线程 DDA，2 = 多线程 DDA + 伤害累积。
+	 * 多线程那套要是起不来（比如被别的 coremod 挡了线程），退回旧实现，别让整次爆炸消失。
+	 */
+	private IExplosionRay createExplosion() {
+		int algorithm = 2;
+
+		if(algorithm == 1 || algorithm == 2) {
+			try {
+				return new ExplosionNukeRayParallelized(worldObj, posX, posY, posZ, strength, speed, length);
+			} catch(Throwable t) {
+				MainRegistry.logger.log(Level.ERROR, "Threaded explosion failed to start, falling back to legacy algorithm", t);
+			}
+		}
+
+		return new ExplosionNukeRayBatched(worldObj, (int) posX, (int) posY, (int) posZ, strength, speed, length);
+	}
+
+	/** 把弹坑半径内的掉落物直接销毁（只在服务端执行）。 */
+	private void vaporizeItems(double radius) {
+
+		if(this.worldObj.isRemote || radius <= 0) return;
+
+		List<EntityItem> items = this.worldObj.getEntitiesWithinAABB(EntityItem.class,
+				AxisAlignedBB.getBoundingBox(this.posX, this.posY, this.posZ, this.posX, this.posY, this.posZ)
+						.expand(radius, radius, radius));
+
+		for(EntityItem item : items) {
+			if(item.getDistance(this.posX, this.posY, this.posZ) <= radius) {
+				item.setDead();
+			}
 		}
 	}
 
@@ -160,7 +203,9 @@ public class EntityNukeExplosionMK5 extends EntityExplosionChunkloading {
 
 		EntityNukeExplosionMK5 mk5 = new EntityNukeExplosionMK5(world);
 		mk5.strength = (int)(r);
-		mk5.speed = (int)Math.ceil(100000 / mk5.strength);
+		//before is 100000
+		mk5.speed = (int)Math.ceil( 100000/ mk5.strength);
+		// mk5.speed = (int)Math.ceil(100000);
 		mk5.setPosition(x, y, z);
 		mk5.length = mk5.strength / 2;
 		mk5.loadChunk((int) Math.floor(x / 16D), (int) Math.floor(z / 16D));

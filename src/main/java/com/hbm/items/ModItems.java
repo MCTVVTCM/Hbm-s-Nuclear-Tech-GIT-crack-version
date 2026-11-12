@@ -1341,6 +1341,7 @@ public class ModItems {
 	public static Item sat_coord;
 	public static Item sat_designator;
 	public static Item sat_relay;
+	public static Item jindouyun;
 	
 	@Deprecated public static Item sat_mapper;
 	@Deprecated public static Item sat_scanner;
@@ -1361,6 +1362,7 @@ public class ModItems {
 
 	public static Item gun_b92;
 	public static Item gun_b92_ammo;
+	public static Item portal_gun;
 	public static Item gun_fireext;
 
 	public static Item gun_debug;
@@ -3444,6 +3446,7 @@ public class ModItems {
 		sat_coord = new ItemSatInterface().setUnlocalizedName("sat_coord").setMaxStackSize(1).setCreativeTab(MainRegistry.missileTab).setTextureName(RefStrings.MODID + ":sat_coord");
 		sat_designator = new ItemSatDesignator().setUnlocalizedName("sat_designator").setFull3D().setMaxStackSize(1).setCreativeTab(MainRegistry.missileTab).setTextureName(RefStrings.MODID + ":sat_designator");
 		sat_relay = new ItemSatChip().setUnlocalizedName("sat_relay").setMaxStackSize(1).setCreativeTab(MainRegistry.missileTab).setTextureName(RefStrings.MODID + ":sat_relay");
+		jindouyun = new ItemJindouYun().setUnlocalizedName("jindouyun").setMaxStackSize(1).setCreativeTab(MainRegistry.missileTab).setTextureName(RefStrings.MODID + ":jindouyun");
 
 		mp_thruster_10_kerosene = new ItemCustomMissilePart().makeThruster(FuelType.KEROSENE, 1F, 1.5F, PartSize.SIZE_10).setHealth(10F)					.setUnlocalizedName("mp_thruster_10_kerosene");
 		mp_thruster_10_solid = new ItemCustomMissilePart().makeThruster(FuelType.SOLID, 1F, 1.5F, PartSize.SIZE_10).setHealth(15F)							.setUnlocalizedName("mp_thruster_10_solid");
@@ -3591,6 +3594,7 @@ public class ModItems {
 
 		gun_b92_ammo = new GunB92Cell().setUnlocalizedName("gun_b92_ammo").setMaxStackSize(1).setCreativeTab(MainRegistry.weaponTab).setTextureName(RefStrings.MODID + ":gun_b92_ammo_alt");
 		gun_b92 = new GunB92().setUnlocalizedName("gun_b92").setCreativeTab(MainRegistry.weaponTab).setTextureName(RefStrings.MODID + ":gun_b92");
+		portal_gun = new ItemPortalGun().setUnlocalizedName("portal_gun").setCreativeTab(MainRegistry.weaponTab).setTextureName(RefStrings.MODID + ":portal_gun");
 
 		ToolMaterial matCrucible = EnumHelper.addToolMaterial("CRUCIBLE", 10, 3, 50.0F, 100.0F, 0);
 		crucible = new ItemCrucible(5000, 1F, matCrucible).setUnlocalizedName("crucible").setCreativeTab(MainRegistry.weaponTab).setTextureName(RefStrings.MODID + ":crucible");
@@ -5726,10 +5730,12 @@ public class ModItems {
 		GameRegistry.registerItem(sat_coord, sat_coord.getUnlocalizedName());
 		GameRegistry.registerItem(sat_designator, sat_designator.getUnlocalizedName());
 		GameRegistry.registerItem(sat_relay, sat_relay.getUnlocalizedName());
+		GameRegistry.registerItem(jindouyun, jindouyun.getUnlocalizedName());
 		GameRegistry.registerItem(orbital_assembly, orbital_assembly.getUnlocalizedName());
 
 		//Guns
 		GameRegistry.registerItem(gun_b92, gun_b92.getUnlocalizedName());
+		GameRegistry.registerItem(portal_gun, portal_gun.getUnlocalizedName());
 		GameRegistry.registerItem(crucible, crucible.getUnlocalizedName());
 
 		GameRegistry.registerItem(gun_debug, gun_debug.getUnlocalizedName());

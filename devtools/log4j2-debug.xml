@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  想打开 DEBUG 级别的日志时，把这个文件复制成 <运行目录>/log4j2.xml 即可：
+
+      cp devtools/log4j2-debug.xml eclipse/log4j2.xml
+
+  然后重启客户端。只给 NTM（它用的 logger 名叫 "HBM"）和 Forge 的 FML 开了 debug，
+  别把 Root 改成 debug —— 1.7.10 的 debug 量会瞬间刷屏。
+
+  不想要了就把 eclipse/log4j2.xml 删掉。
+-->
+<Configuration status="WARN">
+    <Appenders>
+        <Console name="SysOut" target="SYSTEM_OUT">
+            <PatternLayout pattern="[%d{HH:mm:ss}] [%t/%level]: %msg%n" />
+        </Console>
+        <Queue name="ServerGuiConsole">
+            <PatternLayout pattern="[%d{HH:mm:ss} %level]: %msg%n" />
+        </Queue>
+        <RollingRandomAccessFile name="File" fileName="logs/latest.log" filePattern="logs/%d{yyyy-MM-dd}-%i.log.gz">
+            <PatternLayout pattern="[%d{HH:mm:ss}] [%t/%level]: %msg%n" />
+            <Policies>
+                <TimeBasedTriggeringPolicy />
+                <OnStartupTriggeringPolicy />
+            </Policies>
+        </RollingRandomAccessFile>
+    </Appenders>
+    <Loggers>
+        <!-- NTM 自己的日志器 -->
+        <Logger name="HBM" level="debug" additivity="false">
+            <AppenderRef ref="SysOut"/>
+            <AppenderRef ref="File"/>
+        </Logger>
+        <!-- 想看 Forge / FML 的细节就打开下面这行 -->
+        <!-- <Logger name="cpw.mods.fml" level="debug" additivity="false">
+            <AppenderRef ref="SysOut"/>
+            <AppenderRef ref="File"/>
+        </Logger> -->
+        <Root level="info">
+            <filters>
+                <MarkerFilter marker="NETWORK_PACKETS" onMatch="DENY" onMismatch="NEUTRAL" />
+                <RegexFilter regex=".*\$\{[^}]*\}.*" onMatch="DENY" onMismatch="NEUTRAL"/>
+            </filters>
+            <AppenderRef ref="SysOut"/>
+            <AppenderRef ref="File"/>
+        </Root>
+    </Loggers>
+</Configuration>

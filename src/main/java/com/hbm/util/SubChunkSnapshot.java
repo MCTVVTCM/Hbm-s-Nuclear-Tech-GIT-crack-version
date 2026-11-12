@@ -4,28 +4,38 @@ import net.minecraft.block.Block;
 import net.minecraft.init.Blocks;
 import net.minecraft.world.World;
 import net.minecraft.world.chunk.Chunk;
+import net.minecraft.world.chunk.NibbleArray;
 import net.minecraft.world.chunk.storage.ExtendedBlockStorage;
-
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
 
 /**
  * A snapshot of a 16×16×16 sub-chunk.
+ *
+ * The blocks are stored the same way Minecraft itself stores them: the raw 12-bit
+ * block ids from {@link ExtendedBlockStorage} (LSB byte array + optional MSB nibble
+ * array), plus a shared id → {@link Block} lookup table. Taking a snapshot is then
+ * two array copies instead of 4096 palette/hash-map operations, which matters because
+ * snapshots are taken on the server thread while the blast map is being generated.
+ *
  * @author mlbv
  */
 public class SubChunkSnapshot {
 	/**
 	 * A sub-chunk that contains only air.
 	 */
-	public static final SubChunkSnapshot EMPTY = new SubChunkSnapshot(new Block[]{Blocks.air}, null);
-	private final Block[] palette;
-	private final short[] data;
+	public static final SubChunkSnapshot EMPTY = new SubChunkSnapshot(null, null);
 
-	private SubChunkSnapshot(Block[] p, short[] d) {
-		this.palette = p;
-		this.data = d;
+	private static final int VOLUME = 16 * 16 * 16;
+
+	/** Shared id → Block table, filled on first use (after all mods registered their blocks). */
+	private static final Block[] ID_TABLE = new Block[4096];
+	private static volatile boolean idTableReady = false;
+
+	private final byte[] lsb;
+	private final byte[] msb;
+
+	private SubChunkSnapshot(byte[] lsb, byte[] msb) {
+		this.lsb = lsb;
+		this.msb = msb;
 	}
 
 	/**
@@ -38,10 +48,10 @@ public class SubChunkSnapshot {
 	 * @param allowGeneration
 	 *        Whether to generate chunks. If false, attempting to retrieve a snapshot of a chunk that does not exist will return {@link SubChunkSnapshot#EMPTY}.
 	 * @return
-	 *        A SubChunkSnapshot containing the palette and block data for the sub-chunk,
+	 *        A SubChunkSnapshot containing the block data for the sub-chunk,
 	 *        or {@link SubChunkSnapshot#EMPTY} if the region contains only air.
 	 */
-	public static SubChunkSnapshot getSnapshot(World world, SubChunkKey key, boolean allowGeneration){
+	public static SubChunkSnapshot getSnapshot(World world, SubChunkKey key, boolean allowGeneration) {
 		if (!world.getChunkProvider().chunkExists(key.getChunkXPos(), key.getChunkZPos()) && !allowGeneration) {
 			return SubChunkSnapshot.EMPTY;
 		}
@@ -49,37 +59,28 @@ public class SubChunkSnapshot {
 		ExtendedBlockStorage ebs = chunk.getBlockStorageArray()[key.getSubY()];
 		if (ebs == null || ebs.isEmpty()) return SubChunkSnapshot.EMPTY;
 
-		short[] data = new short[16 * 16 * 16];
-		List<Block> palette = new ArrayList<>();
-		palette.add(Blocks.air);
-		Map<Block, Short> idxMap = new HashMap<>();
-		idxMap.put(Blocks.air, (short) 0);
-		boolean allAir = true;
+		byte[] source = ebs.getBlockLSBArray();
+		byte[] lsbCopy = new byte[VOLUME];
+		System.arraycopy(source, 0, lsbCopy, 0, Math.min(source.length, VOLUME));
 
-		for (int ly = 0; ly < 16; ly++) {
-			for (int lz = 0; lz < 16; lz++) {
-				for (int lx = 0; lx < 16; lx++) {
-					Block block = ebs.getBlockByExtId(lx, ly, lz);
-					int idx;
-					if (block == Blocks.air) {
-						idx = 0;
-					} else {
-						allAir = false;
-						Short e = idxMap.get(block);
-						if (e == null) {
-							idxMap.put(block, (short) palette.size());
-							palette.add(block);
-							idx = palette.size() - 1;
-						} else {
-							idx = e;
-						}
-					}
-					data[(ly << 8) | (lz << 4) | lx] = (short) idx;
-				}
+		NibbleArray msbArray = ebs.getBlockMSBArray();
+		byte[] msbCopy = msbArray == null ? null : msbArray.data.clone();
+
+		ensureIdTable();
+		return new SubChunkSnapshot(lsbCopy, msbCopy);
+	}
+
+	private static void ensureIdTable() {
+		if (idTableReady) return;
+		synchronized (SubChunkSnapshot.class) {
+			if (idTableReady) return;
+			Block air = Blocks.air;
+			for (int id = 0; id < ID_TABLE.length; id++) {
+				Block block = Block.getBlockById(id);
+				ID_TABLE[id] = block == null ? air : block;
 			}
+			idTableReady = true;
 		}
-		if (allAir) return SubChunkSnapshot.EMPTY;
-		return new SubChunkSnapshot(palette.toArray(new Block[0]), data);
 	}
 
 	/**
@@ -95,8 +96,12 @@ public class SubChunkSnapshot {
 	 *        The Block instance at the given position.
 	 */
 	public Block getBlock(int x, int y, int z) {
-		if (this == EMPTY || data == null) return Blocks.air;
-		short idx = data[(y << 8) | (z << 4) | x];
-		return (idx >= 0 && idx < palette.length) ? palette[idx] : Blocks.air;
+		if (lsb == null) return Blocks.air;
+		int index = y << 8 | z << 4 | x;
+		int id = lsb[index] & 0xFF;
+		if (msb != null) {
+			id |= ((msb[index >> 1] >> ((index & 1) << 2)) & 15) << 8;
+		}
+		return ID_TABLE[id];
 	}
 }

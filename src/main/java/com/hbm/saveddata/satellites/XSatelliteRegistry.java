@@ -34,6 +34,7 @@ public class XSatelliteRegistry {
 		idToClass.put(11, SatelliteRayScan.class);
 		idToClass.put(12, SatelliteScience.class);
 		idToClass.put(13, SatelliteASAT.class);
+		idToClass.put(14, SatelliteExcavator.class);
 
 		// item to sat type mapping
 		registerSatellite(SatelliteMapper.class,			new ComparableStack(ModItems.satellite, 1, EnumSatType.SPY));
@@ -50,6 +51,7 @@ public class XSatelliteRegistry {
 		registerSatellite(SatelliteRayScan.class,			new ComparableStack(ModItems.satellite, 1, EnumSatType.RAY_SCAN));
 		registerSatellite(SatelliteScience.class,			new ComparableStack(ModItems.satellite, 1, EnumSatType.SCIENCE));
 		registerSatellite(SatelliteASAT.class,				new ComparableStack(ModItems.satellite, 1, EnumSatType.ASAT));
+		registerSatellite(SatelliteExcavator.class,		new ComparableStack(ModItems.satellite, 1, EnumSatType.CHUNK_MINER));
 		
 		// and all the legacy crap
 		registerSatellite(SatelliteMapper.class, ModItems.sat_mapper);

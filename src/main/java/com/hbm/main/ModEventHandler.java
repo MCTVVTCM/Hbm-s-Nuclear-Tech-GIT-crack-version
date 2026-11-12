@@ -7,9 +7,11 @@ import com.hbm.blocks.ModBlocks;
 import com.hbm.blocks.generic.BlockAshes;
 import com.hbm.blocks.generic.BlockPedestal;
 import com.hbm.config.GeneralConfig;
+import com.hbm.entity.logic.EntityOrbitalLaser;
 import com.hbm.config.MobConfig;
 import com.hbm.config.RadiationConfig;
 import com.hbm.config.ServerConfig;
+import com.hbm.entity.misc.EntityJindouYun;
 import com.hbm.entity.mob.*;
 import com.hbm.entity.projectile.EntityBulletBaseMK4;
 import com.hbm.entity.projectile.EntityBurningFOEQ;
@@ -43,6 +45,7 @@ import com.hbm.items.weapon.sedna.factory.XFactory12ga;
 import com.hbm.lib.ModDamageSource;
 import com.hbm.lib.RefStrings;
 import com.hbm.packet.PacketDispatcher;
+import com.hbm.packet.toclient.PacketServerStats;
 import com.hbm.packet.toclient.PermaSyncPacket;
 import com.hbm.packet.toclient.PlayerInformPacket;
 import com.hbm.packet.toclient.SerializableRecipePacket;
@@ -66,6 +69,7 @@ import cpw.mods.fml.common.eventhandler.EventPriority;
 import cpw.mods.fml.common.eventhandler.SubscribeEvent;
 import cpw.mods.fml.common.gameevent.PlayerEvent;
 import cpw.mods.fml.common.gameevent.PlayerEvent.PlayerChangedDimensionEvent;
+import org.apache.logging.log4j.LogManager;
 import cpw.mods.fml.common.gameevent.TickEvent;
 import cpw.mods.fml.common.gameevent.TickEvent.Phase;
 import cpw.mods.fml.common.gameevent.TickEvent.WorldTickEvent;
@@ -95,7 +99,10 @@ import net.minecraft.item.Item;
 import net.minecraft.item.ItemArmor;
 import net.minecraft.item.ItemFood;
 import net.minecraft.item.ItemStack;
+import net.minecraft.item.crafting.FurnaceRecipes;
 import net.minecraft.nbt.NBTTagCompound;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.util.MathHelper;
 import net.minecraft.potion.Potion;
 import net.minecraft.potion.PotionEffect;
 import net.minecraft.tileentity.TileEntitySign;
@@ -103,6 +110,7 @@ import net.minecraft.util.*;
 import net.minecraft.world.World;
 import net.minecraftforge.common.util.FakePlayer;
 import net.minecraftforge.common.util.ForgeDirection;
+import net.minecraft.util.DamageSource;
 import net.minecraftforge.event.CommandEvent;
 import net.minecraftforge.event.ServerChatEvent;
 import net.minecraftforge.event.entity.EntityEvent;
@@ -132,6 +140,8 @@ import java.util.*;
 public class ModEventHandler {
 
 	private static Random rand = new Random();
+	/** 每 20 tick 往客户端推一次服务端 tick 数据，供 Tab 列表显示 */
+	private static int statTicker = 0;
 
 	@SubscribeEvent
 	public void onPlayerLogin(PlayerEvent.PlayerLoggedInEvent event) {
@@ -211,6 +221,21 @@ public class ModEventHandler {
 
 			if(!player.inventory.hasItem(ModItems.beta))
 				player.inventory.addItemStackToInventory(new ItemStack(ModItems.beta));
+		}
+	}
+
+	/**
+	 * 骑筋斗云时免疫伤害。挂在 LivingAttackEvent 这一层最省事：摔落、爆炸、火焰、窒息、近战、
+	 * 弹射物全部先经过这里，取消掉就连伤害计算都不用做。
+	 */
+	@SubscribeEvent
+	public void onRiderAttack(LivingAttackEvent event) {
+
+		if(event.entityLiving.ridingEntity instanceof EntityJindouYun) {
+			// 管理员 /kill 走的 outOfWorld 放行，否则杀不掉
+			if(event.source != DamageSource.outOfWorld) {
+				event.setCanceled(true);
+			}
 		}
 	}
 
@@ -488,10 +513,89 @@ public class ModEventHandler {
 		}
 	}
 
+	/**
+	 * 单次死亡最多生成多少个额外掉落物。
+	 *
+	 * 这不是"抢夺等级上限"——等级填多少就是多少（30000 完全没问题）。这里只挡住
+	 * "手滑填 21 亿"那种情况：2.1e9 个 EntityItem 需要 20 GB 以上内存，任何服务器都撑不住，
+	 * 之前就是这么卡死的。嫌小直接把这个数改大。
+	 */
+	private static final int MAX_LOOT_ITEMS_PER_DEATH = Integer.MAX_VALUE;
+
 	@SubscribeEvent
 	public void onLivingDrop(LivingDropsEvent event) {
 
 		if(!event.entityLiving.worldObj.isRemote) {
+
+			// 激光击杀：补抢夺差额 + 把能烤熟的掉落物换成熟食
+			NBTTagCompound laserLoot = event.entityLiving.getEntityData();
+			int wantedLooting = laserLoot.getInteger("ntmLaserLooting");
+			boolean laserBurn = laserLoot.getBoolean("ntmLaserBurn");
+
+			// 除了实体身上的标记，再按伤害类型兜一层：有些怪是挨完激光转头被火烧死的，
+			// 死亡源变成 inFire，标记还在但伤害类型对不上，这里两种都认。
+			String damageType = event.source == null ? "" : event.source.damageType;
+			boolean laserSource = "laser".equals(damageType) || "nuclearBlast".equals(damageType);
+			boolean cook = laserBurn || laserSource;
+
+			// 死光/核弹那条链（ExplosionNukeGeneric.dealDamage）不打抢夺标记，
+			// 这里按伤害类型兜底用激光自己的等级，否则那条链上 LASER_LOOTING 完全无效。
+			if(laserSource && wantedLooting <= 0) wantedLooting = EntityOrbitalLaser.LASER_LOOTING;
+
+			// 无条件打一行：这条调试信息不需要改 config，看到这行就说明逻辑在跑
+			if(wantedLooting > 0 || cook) {
+				LogManager.getLogger("HBM").info("[laser-drop] " + event.entityLiving.getClass().getSimpleName()
+						+ " type=" + damageType + " tagLoot=" + wantedLooting + " tagBurn=" + laserBurn
+						+ " drops=" + event.drops.size());
+			}
+
+			if(wantedLooting > 0 || cook) {
+				laserLoot.removeTag("ntmLaserLooting");
+				laserLoot.removeTag("ntmLaserBurn");
+
+				// 用 long 算，避免 1 + bonus 溢出成负数；不用 nextInt，因为 bound 可能超过 int
+				long bonus = (long) wantedLooting - (long) event.lootingLevel;
+
+				if(bonus > 0) {
+					World lootWorld = event.entityLiving.worldObj;
+					ArrayList<EntityItem> extra = new ArrayList<EntityItem>();
+					long budget = MAX_LOOT_ITEMS_PER_DEATH;
+
+					for(EntityItem drop : event.drops) {
+						if(budget <= 0) break;
+
+						ItemStack dropStack = drop.getEntityItem();
+						long add = (long) (lootWorld.rand.nextDouble() * (bonus + 1.0));
+						if(add <= 0) continue;
+
+						add = Math.min(add, budget);
+						budget -= add;
+
+						int max = dropStack.getMaxStackSize();
+						long remaining = add;
+
+						while(remaining > 0) {
+							ItemStack copy = dropStack.copy();
+							copy.stackSize = (int) Math.min(remaining, max);
+							remaining -= copy.stackSize;
+							extra.add(new EntityItem(lootWorld, event.entityLiving.posX,
+									event.entityLiving.posY + 0.5D, event.entityLiving.posZ, copy));
+						}
+					}
+
+					event.drops.addAll(extra);
+				}
+
+				// 被激光烤过：生肉/土豆/鱼这类能烧的都换成成品
+				if(cook) {
+					for(EntityItem drop : event.drops) {
+						ItemStack stack = drop.getEntityItem();
+						ItemStack cooked = smelt(stack);
+						if(cooked != stack) drop.setEntityItemStack(cooked);
+					}
+				}
+			}
+
 			boolean contaminated = HbmLivingProps.getContagion(event.entityLiving) > 0;
 
 			if(contaminated) {
@@ -507,6 +611,18 @@ public class ModEventHandler {
 				}
 			}
 		}
+	}
+
+	/** 能进熔炉的就换成产物（生牛肉->牛排、生猪排->熟猪排、土豆->烤土豆……），否则原样返回。 */
+	private static ItemStack smelt(ItemStack stack) {
+		if(stack == null) return null;
+
+		ItemStack result = FurnaceRecipes.smelting().getSmeltingResult(stack);
+		if(result == null) return stack;
+
+		ItemStack cooked = result.copy();
+		cooked.stackSize = stack.stackSize;
+		return cooked;
 	}
 
 	@SubscribeEvent
@@ -593,9 +709,77 @@ public class ModEventHandler {
 	public void worldTick(WorldTickEvent event) {
 		
 		World world = event.world;
+
+		// Hot reload cannot add new event handlers: the bus builds its method table when a
+		// listener is registered, which only happens at mod load. Registering the portal fall
+		// protection from this already-registered handler makes it work without a restart.
+		try {
+			if(!com.hbm.handler.PortalFallProtection.registered) {
+				com.hbm.handler.PortalFallProtection.registered = true;
+				net.minecraftforge.common.MinecraftForge.EVENT_BUS.register(new com.hbm.handler.PortalFallProtection());
+				org.apache.logging.log4j.LogManager.getLogger("HBM").info("[portal] fall protection registered (lazy)");
+			}
+		} catch(Throwable t) {
+			// A partially reloaded build (class missing from the running classpath) must never take
+			// the whole server tick loop down with it.
+		}
 		long time = world.getTotalWorldTime();
 
 		if(world != null && !world.isRemote) {
+
+			// 1.7.10 里潜行对骑乘的语义是"下马"：EntityPlayer.updateRidden() 看到 isSneaking()
+			// 就直接 mountEntity(null)。筋斗云要的是"潜行 = 下降"，所以在实体 tick 之前
+			// 把这个标记吃掉，转成云自己的 wantsBrake，玩家就不会被甩下来。
+			if(event.phase == Phase.START) {
+				for(Object o : world.playerEntities) {
+					EntityPlayer p = (EntityPlayer) o;
+
+					// 每 tick 检查一次：没骑云了就立刻把临时飞行能力收回（云被卸载/删除也不会漏）
+					EntityJindouYun.revokeStaleFlight(p);
+
+					if(p.ridingEntity instanceof EntityJindouYun) {
+						EntityJindouYun cloud = (EntityJindouYun) p.ridingEntity;
+						// 最终保险：云脚下与前方一小段的区块必须在内存里，
+						// 否则实体不会被 tick，骑乘关系会断，玩家直接掉进虚空。
+						cloud.ensureSelfChunk();
+						if(p.isSneaking()) {
+							cloud.wantsBrake = true;
+							p.setSneaking(false);
+						}
+					} else {
+
+						// 骑乘期间我们给玩家上过 noClip（防止被"顶出方块"逻辑推挤）。
+						// 一旦脱离骑乘，必须还回去 —— 否则他会穿过地形一路坠到虚空。
+						if(p.noClip) p.noClip = false;
+
+						// 云停在方块内部时下云，玩家会卡在方块里动不了。
+						// 用包围盒相交判断（isEntityInsideOpaqueBlock 只看头部，脚卡在方块里时它是 false）。
+						if(!p.worldObj.getCollidingBoundingBoxes(p, p.boundingBox).isEmpty()) {
+							for(int i = 1; i <= 32; i++) {
+								if(p.worldObj.getCollidingBoundingBoxes(p, p.boundingBox.getOffsetBoundingBox(0.0D, i, 0.0D)).isEmpty()) {
+									p.setPosition(p.posX, p.posY + i + 0.05D, p.posZ);
+									p.motionX = p.motionY = p.motionZ = 0.0D;
+									p.fallDistance = 0.0F;
+									break;
+								}
+							}
+						}
+
+						// 真掉出世界了：捞回最近的云；云已经被卸载/删除就提到地表高度，别让他继续往下掉
+						if(p.posY < -8.0D) {
+							EntityJindouYun cloud = EntityJindouYun.getLastCloud(p);
+							if(cloud != null && !cloud.isDead) {
+								p.mountEntity(cloud);
+								p.setPosition(cloud.posX, cloud.posY + cloud.getMountedYOffset(), cloud.posZ);
+							} else {
+								p.setPosition(p.posX, 200.0D, p.posZ);
+							}
+							p.motionX = p.motionY = p.motionZ = 0.0D;
+							p.fallDistance = 0.0F;
+						}
+					}
+				}
+			}
 
 			if(reference != null) {
 				for(Object player : world.playerEntities) {
@@ -1070,6 +1254,18 @@ public class ModEventHandler {
 		// This has since been fixed.
 
 		if(event.phase == Phase.END) {
+			// 每 20 tick 广播一次服务端 tick 数据，客户端按住 Tab 时显示
+			if(++statTicker >= 20) {
+				statTicker = 0;
+				MinecraftServer server = MinecraftServer.getServer();
+				if(server != null) {
+					// tickTimeArray 是原版按 tick 记录的耗时（纳秒，最近 100 tick），F3 的 avg tick 就是它
+					double mspt = MathHelper.average(server.tickTimeArray) * 1.0E-6D;
+					float tps = mspt <= 50.0D ? 20.0F : (float) (1000.0D / mspt);
+					PacketDispatcher.wrapper.sendToAll(new PacketServerStats((float) mspt, tps));
+				}
+			}
+
 			// As ByteBufs are added to the queue in `com.hbm.packet.toclient.PacketThreading`, they are processed by the packet thread.
 			// This waits until the thread is finished, which most of the time will be instantly since it has plenty of time to process in parallel to everything else.
 			PacketThreading.waitUntilThreadFinished();
@@ -1105,6 +1301,8 @@ public class ModEventHandler {
 
 	@SubscribeEvent
 	public void onChunkLoad(ChunkEvent.Load event) {
+		// 只统计服务端：单人模式客户端世界也会收到这个事件，否则计数翻倍
+		if(!event.world.isRemote) com.hbm.util.ChunkStats.loadedTotal++;
 
 		//test for automatic in-world block replacement
 

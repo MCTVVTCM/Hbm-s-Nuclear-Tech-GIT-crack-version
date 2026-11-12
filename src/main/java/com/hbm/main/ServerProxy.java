@@ -19,6 +19,28 @@ public class ServerProxy {
 	
 	private static final I18nServer I18N = new I18nServer();
 
+	/** 客户端专用：本地玩家。专用服务端返回 null，调用方据此跳过客户端预测。 */
+	public EntityPlayer getLocalPlayer() { return null; }
+
+	/** 客户端专用：冲刺键是否按下（筋斗云的 Ctrl 加速）。服务端返回 false。 */
+	public boolean isBoostKeyDown() { return false; }
+
+	/** 客户端专用：潜行键的**原始按键**状态。服务端返回 false。 */
+	public boolean inputSneak() { return false; }
+
+	/** 客户端专用：F3 那行调试信息（含 fps）。服务端返回空串。 */
+	public String debugInfo() { return ""; }
+
+	/* ---------- 客户端专用：原始移动输入。服务端一律返回 0 ---------- */
+	/** 骑乘时 player.moveForward 会被原版清零，所以本地预测必须直接读 movementInput */
+	public float inputForward() { return 0.0F; }
+	public float inputStrafe() { return 0.0F; }
+	public boolean inputJump() { return false; }
+	public float keyForward() { return 0.0F; }
+	public float keyStrafe() { return 0.0F; }
+	public float rawMoveForward() { return 0.0F; }
+	public void notify(String msg) { }
+
 	//sort by estimated time of display. longer lasting ones should be sorted at the top.
 	public static final int ID_DUCK = 0;
 	public static final int ID_FILTER = 1;

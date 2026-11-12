@@ -494,7 +494,7 @@ public class TileEntityMachineRadarNT extends TileEntityMachineBase implements I
 				if(data.hasKey("launchPosX")) {
 					int x = data.getInteger("launchPosX");
 					int z = data.getInteger("launchPosZ");
-					int y = 60; //one day I will make radars transmit Y coordinate as well and you will be butchered alhamdulila
+					int y = -1; // 雷达不传 Y：-1 = 让卫星用地表高度，别塞个假的 60 把炸弹埋进地下
 					worldObj.playSoundAtEntity(player, "hbm:item.techBleep", 1.0F, 1.0F);
 					sat.onCoordAction(world, player, x, y, z);
 				}

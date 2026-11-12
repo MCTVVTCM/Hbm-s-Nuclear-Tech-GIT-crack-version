@@ -8,6 +8,7 @@ import com.hbm.util.SubChunkKey;
 import com.hbm.util.SubChunkSnapshot;
 import net.minecraft.block.Block;
 import net.minecraft.init.Blocks;
+import net.minecraft.util.MathHelper;
 import net.minecraft.util.Vec3;
 import net.minecraft.world.ChunkCoordIntPair;
 import net.minecraft.world.EnumSkyBlock;
@@ -21,7 +22,6 @@ import java.util.Comparator;
 import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.DoubleAdder;
 
 /**
  * Threaded DDA raytracer for mk5 explosion.
@@ -36,6 +36,14 @@ public class ExplosionNukeRayParallelized implements IExplosionRay {
 	private static final float NUKE_RESISTANCE_CUTOFF = 2_000_000F;
 	private static final float INITIAL_ENERGY_FACTOR = 0.3F; // Scales crater, no impact on performance
 	private static final double RESOLUTION_FACTOR = 1.0; // Scales ray density, no impact on crater radius
+	/** 工作线程上限，可用 -Dhbm.blastThreads=N 覆盖。留一个核给服务端主线程，避免 tick 被自己饿死。 */
+	private static final int BLAST_THREADS = Math.max(1, Integer.getInteger("hbm.blastThreads", 8));
+	/** 空 sub-chunk 跳跃；出问题可以用 -Dhbm.blastAirSkip=false 关掉。 */
+	private static final boolean AIR_SKIP = Boolean.parseBoolean(System.getProperty("hbm.blastAirSkip", "true"));
+	// Damage accumulation (algorithm 2) uses one float per voxel: 256 KiB per affected chunk, no
+	// per-voxel objects, no quantization and no value ceiling. Fixed point shorts would halve that
+	// memory but need a scale, rounding and a saturation cap - not worth the complexity or the
+	// "leaves are immune to nukes" class of bugs that come with quantizing tiny hits.
 
 	protected final World world;
 	private final double explosionX, explosionY, explosionZ;
@@ -45,7 +53,10 @@ public class ExplosionNukeRayParallelized implements IExplosionRay {
 
 	private final CompletableFuture<List<Vec3>> directionsFuture;
 	private final ConcurrentMap<ChunkCoordIntPair, ConcurrentBitSet> destructionMap;
-	private final ConcurrentMap<ChunkCoordIntPair, ConcurrentMap<Integer, DoubleAdder>> damageMap;
+	/** Quantized accumulated damage per chunk, indexed by the same bit layout as the destruction bitset. */
+	private final ConcurrentMap<ChunkCoordIntPair, float[]> damageMap;
+	/** Block 的抗性是常量，但 getExplosionResistance 在模组方块里可能是虚调用/查配置，按 Block 缓存一次。 */
+	private final ConcurrentMap<Block, Float> resistanceCache = new ConcurrentHashMap<>();
 	private final ConcurrentMap<SubChunkKey, SubChunkSnapshot> snapshots;
 	private final ConcurrentMap<SubChunkKey, ConcurrentLinkedQueue<RayTask>> waitingRoom;
 	private final BlockingQueue<RayTask> rayQueue;
@@ -93,7 +104,7 @@ public class ExplosionNukeRayParallelized implements IExplosionRay {
 		for (int i = 0; i < rayCount; i++) initialRayTasks.add(new RayTask(i));
 		this.rayQueue = new LinkedBlockingQueue<>(initialRayTasks);
 
-		int workers = Math.max(1, Runtime.getRuntime().availableProcessors() - 1);
+		int workers = Math.max(1, Math.min(BLAST_THREADS, Runtime.getRuntime().availableProcessors() - 1));
 		this.pool = Executors.newWorkStealingPool(workers);
 		this.directionsFuture = CompletableFuture.supplyAsync(() -> generateSphereRays(rayCount));
 
@@ -114,11 +125,18 @@ public class ExplosionNukeRayParallelized implements IExplosionRay {
 		this.latchWatcherThread.start();
 	}
 
-	private static float getNukeResistance(Block b) {
-		if (b.getMaterial().isLiquid()) return 0.1F;
-		if (b == Blocks.sandstone) return Blocks.stone.getExplosionResistance(null);
-		if (b == Blocks.obsidian) return Blocks.stone.getExplosionResistance(null) * 3.0F;
-		return b.getExplosionResistance(null);
+	private float getNukeResistance(Block b) {
+		Float cached = resistanceCache.get(b);
+		if (cached != null) return cached;
+
+		float resistance;
+		if (b.getMaterial().isLiquid()) resistance = 0.1F;
+		else if (b == Blocks.sandstone) resistance = Blocks.stone.getExplosionResistance(null);
+		else if (b == Blocks.obsidian) resistance = Blocks.stone.getExplosionResistance(null) * 3.0F;
+		else resistance = b.getExplosionResistance(null);
+
+		resistanceCache.put(b, resistance);
+		return resistance;
 	}
 
 	private List<SubChunkKey> getAllSubChunks() {
@@ -173,9 +191,13 @@ public class ExplosionNukeRayParallelized implements IExplosionRay {
 
 	private void processCacheKey(SubChunkKey ck) {
 		if (snapshots.containsKey(ck)) return;
+		// 先放快照再原子地摘走等待队列：park() 里插入等待者之后会复查快照，
+		// 两边靠 ConcurrentHashMap 的按 key 原子性序列化，谁先谁后都不会丢任务。
 		snapshots.put(ck, SubChunkSnapshot.getSnapshot(world, ck, BombConfig.chunkloading));
-		ConcurrentLinkedQueue<RayTask> waiters = waitingRoom.remove(ck);
-		if (waiters != null) rayQueue.addAll(waiters);
+		waitingRoom.computeIfPresent(ck, (k, waiters) -> {
+			rayQueue.addAll(waiters);
+			return null;
+		});
 	}
 
 	@Override
@@ -204,10 +226,16 @@ public class ExplosionNukeRayParallelized implements IExplosionRay {
 
 			for (int subY = 0; subY < storages.length; subY++) {
 				ExtendedBlockStorage storage = storages[subY];
-				if (storage == null) continue;
 
 				int startBit = (WORLD_HEIGHT - 1 - ((subY << 4) + 15)) << 8;
 				int endBit = ((WORLD_HEIGHT - 1 - (subY << 4)) << 8) | 0xFF;
+
+				// 没有 storage 等于这一段全是空气：把位清掉，否则 bs.isEmpty() 永远不为真、
+				// destructionMap 永远清不空，爆炸实体就不死了。
+				if (storage == null) {
+					clearRange(bs, startBit, endBit);
+					continue;
+				}
 
 				int bit = bs.nextSetBit(startBit);
 
@@ -218,18 +246,26 @@ public class ExplosionNukeRayParallelized implements IExplosionRay {
 					int xLocal = xGlobal & 0xF;
 					int yLocal = yGlobal & 0xF;
 					int zLocal = zGlobal & 0xF;
-					if (storage.getBlockByExtId(xLocal, yLocal, zLocal) != Blocks.air) {
-						if (world.getTileEntity(xGlobal, yGlobal, zGlobal) != null) {
+					Block current = storage.getBlockByExtId(xLocal, yLocal, zLocal);
+					if (current != Blocks.air) {
+						// world.getTileEntity() builds a ChunkPosition and hashes it for every single block;
+						// most blocks can never own a tile entity, so ask the block first.
+						if (current.hasTileEntity(storage.getExtBlockMetadata(xLocal, yLocal, zLocal))
+								&& world.getTileEntity(xGlobal, yGlobal, zGlobal) != null) {
 							world.removeTileEntity(xGlobal, yGlobal, zGlobal);
 						}
 
-						storage.func_150818_a(xLocal, yLocal, zLocal, Blocks.air);
-						storage.setExtBlockMetadata(xLocal, yLocal, zLocal, 0);
+						// 必须走 Chunk.func_150807_a（World.setBlock 内部用的就是这个）：
+						// 它除了写方块，还会更新 heightMap、重新扩散天空光/方块光。
+						// 之前直接写 ExtendedBlockStorage，光照数组和 heightMap 全是旧的 ——
+						// 结果弹坑一片漆黑、还夹着一条条竖直的亮缝（就是截图里那些蓝条）。
+						chunk.func_150807_a(xLocal, yGlobal, zLocal, Blocks.air, 0);
 						chunkModified = true;
 
 						world.notifyBlocksOfNeighborChange(xGlobal, yGlobal, zGlobal, Blocks.air);
 						world.markBlockForUpdate(xGlobal, yGlobal, zGlobal);
 
+						// heightMap 由 func_150807_a 修好了，这里再把光往邻居扩散一次
 						world.updateLightByType(EnumSkyBlock.Sky, xGlobal, yGlobal, zGlobal);
 						world.updateLightByType(EnumSkyBlock.Block, xGlobal, yGlobal, zGlobal);
 					}
@@ -252,6 +288,12 @@ public class ExplosionNukeRayParallelized implements IExplosionRay {
 		if (orderedChunks.isEmpty() && destructionMap.isEmpty()) {
 			destroyFinished = true;
 			if (pool != null) pool.shutdown();
+		}
+	}
+
+	private static void clearRange(ConcurrentBitSet bs, int startBit, int endBit) {
+		for (int bit = bs.nextSetBit(startBit); bit >= 0 && bit <= endBit; bit = bs.nextSetBit(bit + 1)) {
+			bs.clear(bit);
 		}
 	}
 
@@ -305,42 +347,40 @@ public class ExplosionNukeRayParallelized implements IExplosionRay {
 	}
 
 	private void runConsolidation() {
-		damageMap.forEach((cp, innerDamageMap) -> {
-			if (innerDamageMap.isEmpty()) {
-				damageMap.remove(cp);
-				return;
-			}
-			ConcurrentBitSet chunkDestructionBitSet = destructionMap.computeIfAbsent(cp, k -> new ConcurrentBitSet(BITSET_SIZE));
-			innerDamageMap.forEach((bitIndex, accumulatedDamageAdder) -> {
-				float accumulatedDamage = (float) accumulatedDamageAdder.sum();
-				if (accumulatedDamage <= 0.0f) {
-					innerDamageMap.remove(bitIndex);
-					return;
-				}
+		damageMap.forEach((cp, damage) -> {
+			if (damage == null) return;
+
+			ConcurrentBitSet chunkDestructionBitSet = null;
+			int cachedSubY = Integer.MIN_VALUE;
+			SubChunkSnapshot cachedSnap = null;
+
+			for (int bitIndex = 0; bitIndex < BITSET_SIZE; bitIndex++) {
+				float accumulatedDamage = damage[bitIndex];
+				if (accumulatedDamage <= 0F) continue;
+
 				int yGlobal = WORLD_HEIGHT - 1 - (bitIndex >>> 8);
 				int subY = yGlobal >> 4;
-				if (subY < 0) {
-					innerDamageMap.remove(bitIndex);
-					return;
+				if (subY < 0) continue;
+
+				if (subY != cachedSubY) {
+					cachedSubY = subY;
+					cachedSnap = snapshots.get(new SubChunkKey(cp, subY));
 				}
-				SubChunkKey snapshotKey = new SubChunkKey(cp, subY);
-				SubChunkSnapshot snap = snapshots.get(snapshotKey);
-				if (snap == null || snap == SubChunkSnapshot.EMPTY) {
-					innerDamageMap.remove(bitIndex);
-					return;
+				if (cachedSnap == null || cachedSnap == SubChunkSnapshot.EMPTY) continue;
+
+				Block originalBlock = cachedSnap.getBlock((bitIndex >>> 4) & 0xF, yGlobal & 0xF, bitIndex & 0xF);
+				if (originalBlock == Blocks.air) continue;
+
+				float resistance = getNukeResistance(originalBlock) * (float) RESOLUTION_FACTOR;
+				if (accumulatedDamage >= resistance) {
+					if (chunkDestructionBitSet == null) {
+						chunkDestructionBitSet = destructionMap.computeIfAbsent(cp, k -> new ConcurrentBitSet(BITSET_SIZE));
+					}
+					chunkDestructionBitSet.set(bitIndex);
 				}
-				int xLocal = (bitIndex >>> 4) & 0xF;
-				int zLocal = bitIndex & 0xF;
-				Block originalBlock = snap.getBlock(xLocal, yGlobal & 0xF, zLocal);
-				if (originalBlock == Blocks.air) {
-					innerDamageMap.remove(bitIndex);
-					return;
-				}
-				float resistance = getNukeResistance(originalBlock);
-				if (accumulatedDamage >= resistance * RESOLUTION_FACTOR) chunkDestructionBitSet.set(bitIndex);
-				innerDamageMap.remove(bitIndex);
-			});
-			if (innerDamageMap.isEmpty()) damageMap.remove(cp);
+			}
+
+			damageMap.remove(cp);
 		});
 		damageMap.clear();
 		consolidationFinished = true;
@@ -364,18 +404,27 @@ public class ExplosionNukeRayParallelized implements IExplosionRay {
 		private static final double RAY_DIRECTION_EPSILON = 1e-6;
 		private static final double PROCESSING_EPSILON = 1e-9;
 		private static final float MIN_EFFECTIVE_DIST_FOR_ENERGY_CALC = 0.01f;
+		private static final double JUMP_EPSILON = 1e-6; // 跳过后落在盒外一点点，避免 tMax 算出 0 而原地打转
 
 		final int dirIndex;
+		double dirX, dirY, dirZ;
 		double px, py, pz;
 		int x, y, z;
 		float energy;
 		double tMaxX, tMaxY, tMaxZ, tDeltaX, tDeltaY, tDeltaZ;
 		int stepX, stepY, stepZ;
 		boolean initialised = false;
+		boolean finished = false;
 		double currentRayPosition;
 
 		private int lastCX = Integer.MIN_VALUE, lastCZ = Integer.MIN_VALUE, lastSubY = Integer.MIN_VALUE;
-		private SubChunkKey currentSubChunkKey = null;
+		/** Reused for snapshots.get() only - never store it in a map, map keys must not mutate. */
+		private final SubChunkKey lookupKey = new SubChunkKey(0, 0, 0);
+		private SubChunkSnapshot currentSnap;
+		private ChunkCoordIntPair currentChunkPos;
+		private ChunkCoordIntPair cachedBitsetChunk, cachedDamageChunk;
+		private ConcurrentBitSet cachedBitset;
+		private float[] cachedDamage;
 
 		RayTask(int dirIdx) {
 			this.dirIndex = dirIdx;
@@ -393,9 +442,9 @@ public class ExplosionNukeRayParallelized implements IExplosionRay {
 			this.z = originZ;
 			this.currentRayPosition = 0.0;
 
-			double dirX = dir.xCoord;
-			double dirY = dir.yCoord;
-			double dirZ = dir.zCoord;
+			double dirX = this.dirX = dir.xCoord;
+			double dirY = this.dirY = dir.yCoord;
+			double dirZ = this.dirZ = dir.zCoord;
 
 			double absDirX = Math.abs(dirX);
 			this.stepX = (absDirX < RAY_DIRECTION_EPSILON) ? 0 : (dirX > 0 ? 1 : -1);
@@ -416,9 +465,10 @@ public class ExplosionNukeRayParallelized implements IExplosionRay {
 		}
 
 		void trace() {
+			if (finished) return;
 			if (!initialised) init();
 			if (energy <= 0) {
-				latch.countDown();
+				finish();
 				return;
 			}
 
@@ -429,23 +479,42 @@ public class ExplosionNukeRayParallelized implements IExplosionRay {
 				int cx = x >> 4;
 				int cz = z >> 4;
 				int subY = y >> 4;
+				// A ConcurrentHashMap lookup per voxel was the single most expensive step of the
+				// raytrace; the sub-chunk only changes when the ray crosses a 16-block boundary.
 				if (cx != lastCX || cz != lastCZ || subY != lastSubY) {
-					currentSubChunkKey = new SubChunkKey(cx, cz, subY);
+					lookupKey.update(cx, cz, subY);
+					currentSnap = snapshots.get(lookupKey);
+					currentChunkPos = lookupKey.getPos();
 					lastCX = cx;
 					lastCZ = cz;
 					lastSubY = subY;
+					cachedBitsetChunk = null;
+					cachedDamageChunk = null;
 				}
 
-				SubChunkSnapshot snap = snapshots.get(currentSubChunkKey);
+				SubChunkSnapshot snap = currentSnap;
 				if (snap == null) {
-					final boolean[] amFirst = {false};
-					ConcurrentLinkedQueue<RayTask> waiters = waitingRoom.computeIfAbsent(currentSubChunkKey, k -> {
-						amFirst[0] = true;
-						return new ConcurrentLinkedQueue<>();
-					});
-					if (amFirst[0]) highPriorityReactiveQueue.add(currentSubChunkKey);
-					waiters.add(this);
+					// Park with a fresh key: this one is stored in the waiting room, so it must not be the reused instance.
+					park(new SubChunkKey(cx, cz, subY));
+					lastCX = Integer.MIN_VALUE;
 					return;
+				}
+
+				// A sub-chunk of pure air cannot take damage, so walking through it voxel by voxel
+				// (16 steps per axis at minimum) is wasted work. Solve the ray/box intersection and
+				// jump straight to where the ray leaves the box instead.
+				if (AIR_SKIP && snap == SubChunkSnapshot.EMPTY) {
+					double tExit = subChunkExitT(cx, cz, subY);
+					if (tExit == tExit && tExit > currentRayPosition + JUMP_EPSILON) {
+						double target = tExit + JUMP_EPSILON;
+						if (target >= radius - PROCESSING_EPSILON) {
+							currentRayPosition = radius;
+							break;
+						}
+						resetDDA(target);
+						lastCX = Integer.MIN_VALUE;
+						continue;
+					}
 				}
 				double t_exit_voxel = Math.min(tMaxX, Math.min(tMaxY, tMaxZ));
 				double segmentLenInVoxel = t_exit_voxel - this.currentRayPosition;
@@ -469,10 +538,22 @@ public class ExplosionNukeRayParallelized implements IExplosionRay {
 							energy -= damageDealt;
 							if (damageDealt > 0) {
 								int bitIndex = ((WORLD_HEIGHT - 1 - y) << 8) | ((x & 0xF) << 4) | (z & 0xF);
-								ChunkCoordIntPair chunkPos = currentSubChunkKey.getPos();
+								ChunkCoordIntPair chunkPos = currentChunkPos;
 								if (BombConfig.explosionAlgorithm == 2) {
-									damageMap.computeIfAbsent(chunkPos, cp -> new ConcurrentHashMap<>(256)).computeIfAbsent(bitIndex, k -> new DoubleAdder()).add(damageDealt);
-								} else if (energy > 0) destructionMap.computeIfAbsent(chunkPos, posKey -> new ConcurrentBitSet(BITSET_SIZE)).set(bitIndex);
+									if (chunkPos != cachedDamageChunk) {
+										cachedDamageChunk = chunkPos;
+										cachedDamage = damageMap.computeIfAbsent(chunkPos, cp -> new float[BITSET_SIZE]);
+									}
+									// Plain read-modify-write: racing rays may lose an increment, which only
+									// ever makes the crater slightly smaller, and saves an atomic per voxel.
+									cachedDamage[bitIndex] += damageDealt;
+								} else if (energy > 0) {
+									if (chunkPos != cachedBitsetChunk) {
+										cachedBitsetChunk = chunkPos;
+										cachedBitset = destructionMap.computeIfAbsent(chunkPos, posKey -> new ConcurrentBitSet(BITSET_SIZE));
+									}
+									cachedBitset.set(bitIndex);
+								}
 							}
 						}
 					}
@@ -498,7 +579,70 @@ public class ExplosionNukeRayParallelized implements IExplosionRay {
 					}
 				}
 			}
-			latch.countDown();
+			finish();
+		}
+
+		/**
+		 * 停等：等主线程给这个 sub-chunk 拍快照。
+		 *
+		 * 原来的写法会丢任务：主线程可能在我们的 map 查询和 add 之间把等待队列摘走并
+		 * 重新入队，我们随后 add 进的就是一个没人再读的孤儿队列 —— latch 永远减不到 0，
+		 * 爆炸实体永远不消失。这里用 compute 做原子插入，插完再复查快照，
+		 * 如果快照已经就绪就把自己这个队列重新丢回 rayQueue，窗口就关死了。
+		 */
+		private void park(SubChunkKey key) {
+			waitingRoom.compute(key, (k, waiters) -> {
+				ConcurrentLinkedQueue<RayTask> queue = waiters;
+				if (queue == null) {
+					queue = new ConcurrentLinkedQueue<>();
+					highPriorityReactiveQueue.add(k);
+				}
+				queue.add(this);
+				return queue;
+			});
+			if (snapshots.get(key) != null) {
+				waitingRoom.computeIfPresent(key, (k, waiters) -> {
+					rayQueue.addAll(waiters);
+					return null;
+				});
+			}
+		}
+
+		private void finish() {
+			if (!finished) {
+				finished = true;
+				latch.countDown();
+			}
+		}
+
+		/** Absolute t at which the ray leaves the sub-chunk box it is currently inside. */
+		private double subChunkExitT(int cx, int cz, int subY) {
+			double tx = axisExit(explosionX, dirX, cx << 4, (cx << 4) + 16);
+			double ty = axisExit(explosionY, dirY, subY << 4, (subY << 4) + 16);
+			double tz = axisExit(explosionZ, dirZ, cz << 4, (cz << 4) + 16);
+			return Math.min(tx, Math.min(ty, tz));
+		}
+
+		private double axisExit(double origin, double dir, double lo, double hi) {
+			if (dir > RAY_DIRECTION_EPSILON) return (hi - origin) / dir;
+			if (dir < -RAY_DIRECTION_EPSILON) return (lo - origin) / dir;
+			return Double.POSITIVE_INFINITY;
+		}
+
+		/** Re-seeds the DDA state at an arbitrary position along the ray (used after a jump). */
+		private void resetDDA(double t) {
+			this.currentRayPosition = t;
+			double posX = explosionX + dirX * t;
+			double posY = explosionY + dirY * t;
+			double posZ = explosionZ + dirZ * t;
+			this.x = MathHelper.floor_double(posX);
+			this.y = MathHelper.floor_double(posY);
+			this.z = MathHelper.floor_double(posZ);
+			// tMax is an absolute t along the ray, so the offset to the next boundary has to be added to t;
+			// init() gets away without it only because it starts at t = 0.
+			this.tMaxX = stepX == 0 ? Double.POSITIVE_INFINITY : t + ((stepX > 0 ? (this.x + 1 - posX) : (posX - this.x)) * this.tDeltaX);
+			this.tMaxY = stepY == 0 ? Double.POSITIVE_INFINITY : t + ((stepY > 0 ? (this.y + 1 - posY) : (posY - this.y)) * this.tDeltaY);
+			this.tMaxZ = stepZ == 0 ? Double.POSITIVE_INFINITY : t + ((stepZ > 0 ? (this.z + 1 - posZ) : (posZ - this.z)) * this.tDeltaZ);
 		}
 
 		private double getEnergyLossFactor(float resistance) {

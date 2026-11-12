@@ -8,11 +8,13 @@ import net.minecraft.block.BlockLiquid;
 import net.minecraft.block.material.Material;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityLivingBase;
+import net.minecraft.entity.item.EntityItem;
 import net.minecraft.entity.passive.EntityOcelot;
 import net.minecraft.entity.player.EntityPlayerMP;
 import net.minecraft.init.Blocks;
 import net.minecraft.tileentity.TileEntity;
 import net.minecraft.util.AxisAlignedBB;
+import net.minecraft.util.MathHelper;
 import net.minecraft.util.Vec3;
 import net.minecraft.world.World;
 import net.minecraft.world.WorldSettings.GameType;
@@ -64,7 +66,39 @@ public class ExplosionNukeGeneric {
 		dealDamage(world, x, y, z, radius, 250F);
 	}
 	
+	/**
+	 * 清掉爆心附近**已经存在**的掉落物。
+	 *
+	 * 之前这段逻辑写在 dealDamage 里，于是爆炸实体的**每一个 tick**都会删一次范围内的 EntityItem：
+	 * 被炸死的动物刚掉出来的东西，下一 tick 就被自己的爆炸吃掉了，看起来就是"中间死的不掉东西"。
+	 * 现在只在起爆那一 tick 扫一次，清的是爆炸前就堆在地上的杂物，不碰新掉落。
+	 */
+	public static void clearDroppedItems(World world, double x, double y, double z, double radius) {
+
+		List<Entity> list = world.getEntitiesWithinAABBExcludingEntity(null,
+				AxisAlignedBB.getBoundingBox(x, y, z, x, y, z).expand(radius, radius, radius));
+
+		for(Entity e : list) {
+			if(e instanceof EntityItem) e.setDead();
+		}
+	}
+
 	public static void dealDamage(World world, double x, double y, double z, double radius, float maxDamage) {
+
+		// 卫星/雷达打击时爆心经常正好落在方块内部（瞄准方块侧面，或者整片地面都是基岩）。
+		// 从方块内部往外做 rayTraceBlocks，第一步就会打中自己所在的那一格，于是范围内所有实体
+		// 都被判成“被遮挡”，整片零伤害——方块照样被炸开，人却没事。这里把视线起点抬到
+		// 爆心正上方的第一个空气方块，其余判定逻辑不变。
+		double losY = y;
+		int blockX = MathHelper.floor_double(x);
+		int blockY = MathHelper.floor_double(y);
+		int blockZ = MathHelper.floor_double(z);
+
+		if(blockY >= 0 && blockY < 256 && !world.isAirBlock(blockX, blockY, blockZ)) {
+			int ventY = blockY;
+			while(ventY < 255 && !world.isAirBlock(blockX, ventY, blockZ)) ventY++;
+			losY = ventY + 0.5D;
+		}
 
 		List<Entity> list = world.getEntitiesWithinAABBExcludingEntity(null, AxisAlignedBB.getBoundingBox(x, y, z, x, y, z).expand(radius, radius, radius));
 		
@@ -73,17 +107,21 @@ public class ExplosionNukeGeneric {
 			double dist = e.getDistance(x, y, z);
 			
 			if(dist <= radius) {
-				
+
 				double entX = e.posX;
 				double entY = e.posY + e.getEyeHeight();
 				double entZ = e.posZ;
 				
-				if(!isExplosionExempt(e) && !Library.isObstructed(world, x, y, z, entX, entY, entZ)) {
+				if(!isExplosionExempt(e) && !Library.isObstructed(world, x, losY, z, entX, entY, entZ)) {
 					
 					boolean doKnockback = true;
 					double damage = maxDamage * (radius - dist) / radius;
 					if(e instanceof EntityLivingBase && e.isEntityAlive()) {
 						EntityLivingBase living = (EntityLivingBase) e;
+						// 注意：刻意不设置 recentlyHit —— 卫星击杀不掉经验球，
+						// 掉落物（含抢夺补差额、烤熟）由 LivingDropsEvent 单独处理。
+						// 标记"被激光烧过"，掉落物在 LivingDropsEvent 里会被烤熟
+						living.getEntityData().setBoolean("ntmLaserBurn", true);
 						doKnockback = EntityDamageUtil.attackEntityFromNT(living, ModDamageSource.nuclearBlast, (float) damage, true, true, 0, 100F, 0);
 						if(!e.isEntityAlive()) ConfettiUtil.decideConfetti(living, ModDamageSource.nuclearBlast);
 					} else {

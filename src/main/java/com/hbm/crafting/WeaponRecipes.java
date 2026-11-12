@@ -38,6 +38,9 @@ public class WeaponRecipes {
 	public static void register() {
 
 		//Weapon mod table
+		//Portal gun
+		CraftingManager.addRecipeAuto(new ItemStack(ModItems.portal_gun, 1), new Object[] { "PEP", "MGM", " B ", 'P', GUNMETAL.plate(), 'E', Items.ender_pearl, 'M', GUNMETAL.mechanism(), 'G', Blocks.glass, 'B', STEEL.block() });
+
 		CraftingManager.addRecipeAuto(new ItemStack(ModBlocks.machine_weapon_table, 1), new Object[] { "PPP", "TCT", "TST", 'P', GUNMETAL.plate(), 'T', STEEL.ingot(), 'C', Blocks.crafting_table, 'S', STEEL.block() });
 		
 		//SEDNA Parts

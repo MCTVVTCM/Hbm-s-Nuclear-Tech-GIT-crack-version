@@ -134,7 +134,7 @@ public class ExplosionVNT {
 		this.setBlockProcessor(new BlockProcessorStandard()
 				.setNoDrop());
 		this.setEntityProcessor(new EntityProcessorStandard()
-				.withRangeMod(2F)
+				.withRangeMod(-1F)
 				.withDamageMod(new CustomDamageHandlerAmat(50F)));
 		this.setPlayerProcessor(new PlayerProcessorStandard());
 		this.setSFX(new ExplosionEffectAmat());

@@ -4480,6 +4480,7 @@ item.satellite.detector.name=Wideband Radio Emission Detector Satellite
 item.satellite.miner_astro.name=Asteroid Mining Ship
 item.satellite.miner_lunar.name=Lunar Mining Ship
 item.satellite.precision_laser.name=Orbital Precision Laser
+item.satellite.chunk_miner.name=Orbital Chunk Excavator
 item.satellite.radar.name=Radar Satellite
 item.satellite.ray_scan.name=Narrowband Emission Scanning Satellite
 item.satellite.relay.name=RoR Relay Satellite
@@ -5057,6 +5058,7 @@ satellite.pending=Measurements pending: %s
 satellite.progress=Assembly progress: %s
 satellite.queue=Recipes queued: %s
 satellite.ready=READY
+satellite.excavating=Excavating: Y=%s, blocks=%s
 satellite.sensors=Sensor Relays installed: %s
 satellite.spent=SPENT
 
@@ -6735,3 +6737,9 @@ desc.gui.upgrade.effectiveness= * §aEffectiveness§r: Stacks to level 3
 desc.gui.upgrade.overdrive= * §7Overdrive§r: Stacks to level 3
 desc.gui.upgrade.power= * §1Power-Saving§r: Stacks to level 3
 desc.gui.upgrade.speed= * §4Speed§r: Stacks to level 3
+
+item.jindouyun.name=Jindou Yun
+item.jindouyun.desc=Right-click to summon and mount, right-click again to dismiss. WASD to steer, space up, shift to brake, ctrl to boost.
+
+item.portal_gun.name=§2Portal Gun§r
+item.portal_gun.desc=Shoots a pair of linked portals. Right click a wall, then right click somewhere else. Sneak + right click closes them.

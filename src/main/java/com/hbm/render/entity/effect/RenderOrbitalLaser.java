@@ -34,7 +34,7 @@ public class RenderOrbitalLaser extends Render {
 		RenderHelper.disableStandardItemLighting();
 
 		for(int i = 0; i < 8; i++) {
-			tessellator.startDrawing(6);
+			tessellator.startDrawing(7); // GL_QUADS：原来是 6(TRIANGLES) 却塞 4 个顶点，光柱会碎成三角形
 			tessellator.addVertex(vector.xCoord, 250.0D, vector.zCoord);
 			tessellator.addVertex(vector.xCoord, 0.0D, vector.zCoord);
 			vector.rotateAroundY(45);
@@ -46,7 +46,7 @@ public class RenderOrbitalLaser extends Render {
 		GL11.glColor3f(1F, 1F, 1F);
 
 		for(int i = 0; i < 8; i++) {
-			tessellator.startDrawing(6);
+			tessellator.startDrawing(7); // GL_QUADS：原来是 6(TRIANGLES) 却塞 4 个顶点，光柱会碎成三角形
 			tessellator.addVertex(vector.xCoord / 2, 250.0D, vector.zCoord / 2);
 			tessellator.addVertex(vector.xCoord / 2, 0.0D, vector.zCoord / 2);
 			vector.rotateAroundY(45);

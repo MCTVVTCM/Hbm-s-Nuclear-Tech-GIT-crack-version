@@ -9,6 +9,7 @@ import com.hbm.saveddata.SatelliteSavedData;
 import com.hbm.saveddata.satellites.SatelliteBase;
 import com.hbm.tileentity.IGUIProvider;
 
+import org.apache.logging.log4j.LogManager;
 import cpw.mods.fml.relauncher.Side;
 import cpw.mods.fml.relauncher.SideOnly;
 import net.minecraft.entity.Entity;
@@ -55,6 +56,10 @@ public class ItemSatInterface extends ItemSatChip implements IGUIProvider, IItem
 	@Override
 	public void receiveControl(EntityPlayer player, ItemStack stack, NBTTagCompound data) {
 		SatelliteBase sat = SatelliteSavedData.getData(player.worldObj).getSatFromFreq(this.getFreq(stack));
+		// 临时诊断
+		LogManager.getLogger("HBM").info("[sat-diag] sat_coord GUI fire: freq=" + this.getFreq(stack)
+				+ " sat=" + (sat == null ? "NULL" : sat.getClass().getSimpleName())
+				+ " x=" + data.getInteger("x") + " z=" + data.getInteger("z"));
 		if(sat != null) sat.onCoordAction(player.worldObj, player, data.getInteger("x"), data.hasKey("y") ? data.getInteger("y") : -1, data.getInteger("z"));
 	}
 }

@@ -6,6 +6,7 @@ import com.hbm.blocks.generic.BlockAshes;
 import com.hbm.blocks.generic.BlockRebar;
 import com.hbm.config.ClientConfig;
 import com.hbm.config.GeneralConfig;
+import com.hbm.entity.misc.EntityJindouYun;
 import com.hbm.entity.mob.EntityHunterChopper;
 import com.hbm.entity.projectile.EntityChopperMine;
 import com.hbm.entity.train.EntityRailCarRidable;
@@ -82,6 +83,7 @@ import net.minecraft.block.Block;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.entity.AbstractClientPlayer;
 import net.minecraft.client.entity.EntityClientPlayerMP;
+import net.minecraft.client.gui.Gui;
 import net.minecraft.client.gui.GuiMainMenu;
 import net.minecraft.client.gui.ScaledResolution;
 import net.minecraft.client.gui.inventory.GuiContainer;
@@ -126,10 +128,41 @@ import java.util.*;
 
 public class ModEventHandlerClient {
 
+	private static int lastRidingId = -1;
+	private static EntityJindouYun lastCloud;
+
 	public static final int flashDuration = 5_000;
 	public static long flashTimestamp;
 	public static final int shakeDuration = 1_500;
 	public static long shakeTimestamp;
+
+	/** 服务端 MSPT / TPS，由 PacketServerStats 每 20 tick 更新，-1 表示还没收到 */
+	public static volatile float mspt = -1F;
+	public static volatile float tps = -1F;
+
+	/** 按住 Tab 时在左上角显示服务端 tick 数据 */
+	@SubscribeEvent
+	public void onRenderServerStats(RenderGameOverlayEvent.Post event) {
+
+		if(event.type != ElementType.EXPERIENCE) return;
+
+		Minecraft mc = Minecraft.getMinecraft();
+		if(mc.currentScreen != null || mc.thePlayer == null) return;
+		if(!Keyboard.isKeyDown(mc.gameSettings.keyBindPlayerList.getKeyCode())) return;
+
+		String text = mspt < 0F ? "Server: waiting for data..."
+				: String.format(Locale.US, "Server: %.1f mspt  /  %.1f tps", mspt, tps);
+
+		int color = 0xFF55FF55;
+		if(mspt >= 0F) {
+			if(tps < 15F) color = 0xFFFF5555;
+			else if(tps < 19.5F) color = 0xFFFFFF55;
+		}
+
+		int width = mc.fontRenderer.getStringWidth(text);
+		Gui.drawRect(2, 2, 6 + width, 14, 0x90000000);
+		mc.fontRenderer.drawStringWithShadow(text, 4, 4, color);
+	}
 
 	@SubscribeEvent
 	public void onOverlayRender(RenderGameOverlayEvent.Pre event) {
@@ -882,6 +915,73 @@ public class ModEventHandlerClient {
 	public static int lastBrightness = 0;
 
 	static boolean isRenderingItems = false;
+
+	/**
+	 * 骑筋斗云时，在玩家这一 tick 记录 prevPos 之前，先把云推进一步。
+	 *
+	 * 为什么必须在这里：实体位置只在 tick 边界更新，渲染是用 prevPos -> pos 在 partialTicks 上插值的。
+	 * 如果云的推进发生在玩家 tick 之后，骑手的 pos 会先被改掉，紧接着玩家的 onEntityUpdate 把 prevPos
+	 * 也设成同一个值 —— prevPos == pos，这一帧插值为 0，下一帧再补一大步，就是你看到的"一格一格跳"。
+	 * 放到 START 之后：prevPos 还是上一 tick 的位置，updateRiderPosition() 再把 pos 设到新位置，
+	 * 每帧正好走一 tick 的位移，连续。
+	 */
+	@SubscribeEvent
+	public void onPlayerTickJindouYun(TickEvent.PlayerTickEvent event) {
+
+		if(event.player == null) return;
+
+		// 末尾再清一次：潜行标记是 onLivingUpdate 里根据按键重新设上的，
+		// 只在 START 清会被立刻覆盖，模型照样蹲下。
+		if(event.phase == Phase.END) {
+			if(event.player.ridingEntity instanceof EntityJindouYun && event.player.isSneaking()) {
+				event.player.setSneaking(false);
+			}
+			return;
+		}
+		if(event.phase != Phase.START) return;
+
+		EntityPlayer player = event.player;
+
+		// 骑乘关系断了就立刻记一笔：被谁断开、云还在不在、客户端世界还有没有这个实体
+		int ridingId = player.ridingEntity == null ? -1 : player.ridingEntity.getEntityId();
+		if(ridingId != lastRidingId) {
+			MainRegistry.logger.info("[jy-ride] C tick=" + player.ticksExisted + " riding=" + ridingId + " was=" + lastRidingId
+					+ " pos=" + (float) player.posX + "," + (float) player.posY + "," + (float) player.posZ
+					+ " my=" + (float) player.motionY
+					+ " cloudAlive=" + (lastCloud == null ? "null" : (!lastCloud.isDead + "/" + lastCloud.addedToChunk))
+					+ " stillInWorld=" + (lastCloud == null ? "null" : (player.worldObj.getEntityByID(lastCloud.getEntityId()) != null)));
+			if(ridingId == -1 && lastRidingId != -1) lastCloud = null;
+			lastRidingId = ridingId;
+		}
+		if(player.ridingEntity instanceof EntityJindouYun) {
+			lastCloud = (EntityJindouYun) player.ridingEntity;
+			((EntityJindouYun) player.ridingEntity).clientDrive(player);
+
+			// 潜行键被用来"下降/刹车"，但客户端一旦置上这个标记，模型会蹲下、镜头会下沉。
+			// 服务端早就在 ModEventHandler 里清掉了（否则会被甩下马），客户端也要清；
+			// 刹车读的是原始按键（ClientProxy.inputSneak），不受这里影响。
+			if(player.isSneaking()) player.setSneaking(false);
+
+			return;
+		}
+
+		// noClip 是在客户端这边被设上的（updateRiderPosition 每 tick 设一次），
+		// 但服务端那边的回收管不到客户端 —— 不在这里清，客户端会一直以为自己能穿方块，
+		// 下云后就直接穿进地里，看起来就是"落在地上但卡在地里动不了"。
+		if(player.noClip) player.noClip = false;
+
+		// 客户端兜底：上一 tick 还在骑云，这一 tick 却已经在自由落体（云被卸载/销毁、挂载包丢了），
+		// 立刻挂回去。否则在未生成区域下方没有方块，他会一路掉进虚空。
+		if(player.motionY < -0.02D) {
+			EntityJindouYun cloud = EntityJindouYun.getLastCloud(player);
+			if(cloud != null && cloud.riddenByEntity == player && !cloud.isDead) {
+				player.mountEntity(cloud);
+				player.setPosition(cloud.posX, cloud.posY + cloud.getMountedYOffset(), cloud.posZ);
+				player.motionX = player.motionY = player.motionZ = 0.0D;
+				player.fallDistance = 0.0F;
+			}
+		}
+	}
 
 	@SubscribeEvent
 	public void clientTick(ClientTickEvent event) {

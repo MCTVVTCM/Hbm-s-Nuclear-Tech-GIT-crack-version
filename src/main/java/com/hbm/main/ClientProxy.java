@@ -21,6 +21,7 @@ import com.hbm.config.GeneralConfig;
 import com.hbm.entity.cart.EntityMinecartCrate;
 import com.hbm.entity.cart.EntityMinecartNTM;
 import com.hbm.entity.effect.*;
+import com.hbm.entity.misc.EntityJindouYun;
 import com.hbm.entity.grenade.*;
 import com.hbm.entity.item.*;
 import com.hbm.entity.logic.*;
@@ -54,6 +55,7 @@ import com.hbm.particle.psys.engine.EventHandlerParticleEngine;
 import com.hbm.qmaw.QMAWLoader;
 import com.hbm.render.block.*;
 import com.hbm.render.entity.RenderEmpty;
+import com.hbm.render.entity.RenderJindouYun;
 import com.hbm.render.entity.effect.*;
 import com.hbm.render.entity.item.*;
 import com.hbm.render.entity.mob.*;
@@ -101,6 +103,8 @@ import cpw.mods.fml.client.registry.RenderingRegistry;
 import cpw.mods.fml.common.FMLCommonHandler;
 import cpw.mods.fml.relauncher.ReflectionHelper;
 import net.minecraft.block.Block;
+import com.hbm.packet.PacketDispatcher;
+import com.hbm.packet.toserver.PacketJindouYunBoost;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.audio.PositionedSoundRecord;
 import net.minecraft.client.model.ModelChicken;
@@ -158,6 +162,9 @@ public class ClientProxy extends ServerProxy {
 	public void registerRenderInfo() {
 
 		registerClientEventHandler(new ModEventHandlerClient());
+		registerClientEventHandler(new BenchAuto());
+		registerClientEventHandler(new com.hbm.render.HudPortalSpeed());
+		registerClientEventHandler(new com.hbm.render.HudChunkStats());
 		registerClientEventHandler(new ModEventHandlerRenderer());
 		registerClientEventHandler(new EventHandlerParticleEngine());
 		registerClientEventHandler(RenderSkyEffects.RENDER_INSTANCE);
@@ -480,6 +487,8 @@ public class ClientProxy extends ServerProxy {
 
 		ItemRenderLibrary.init();
 
+		MinecraftForgeClient.registerItemRenderer(ModItems.portal_gun, new ItemRenderPortalGun());
+
 		for(Entry<Item, ItemRenderBase> entry : ItemRenderLibrary.renderers.entrySet())
 			MinecraftForgeClient.registerItemRenderer(entry.getKey(), entry.getValue());
 
@@ -617,8 +626,118 @@ public class ClientProxy extends ServerProxy {
 		MinecraftForgeClient.registerItemRenderer(ModItems.conveyor_wand, new ItemRenderBlock(ModBlocks.conveyor, ModBlocks.conveyor_express, ModBlocks.conveyor_double, ModBlocks.conveyor_triple));
 	}
 
+	/**
+	 * 给 EntityJindouYun 的客户端预测用：拿本地玩家。
+	 * 走 ServerProxy 的虚方法，实体类就不必 import 任何客户端类，专用服务器也不会因此加载 ClientProxy。
+	 */
+	@Override
+	public EntityPlayer getLocalPlayer() {
+		return Minecraft.getMinecraft().thePlayer;
+	}
+
+	/**
+	 * 原始潜行按键。不能直接用 player.isSneaking()：
+	 * 那个标记我们会在每 tick 清掉（否则原版会把人甩下马、模型还会蹲下），
+	 * 但刹车需要知道"用户确实按着 Shift"。
+	 */
+	@Override
+	public boolean inputSneak() {
+		net.minecraft.client.entity.EntityPlayerSP p = Minecraft.getMinecraft().thePlayer;
+		return p != null && p.movementInput.sneak;
+	}
+
+	/** 本地是否按着冲刺键（筋斗云的 Ctrl 加速） */
+	@Override
+	public boolean isBoostKeyDown() {
+		return Minecraft.getMinecraft().gameSettings.keyBindSprint.getIsKeyPressed();
+	}
+
+	/** F3 里的调试串，含 fps */
+	@Override
+	public String debugInfo() {
+		return Minecraft.getMinecraft().debug;
+	}
+
+	@Override
+	public float inputForward() {
+		net.minecraft.client.entity.EntityPlayerSP p = Minecraft.getMinecraft().thePlayer;
+		if(p == null) return 0.0F;
+		float mv = p.movementInput.moveForward;
+		if(Math.abs(mv) > 0.01F) return mv;          // 正常路径：movementInput 已经归一化过
+		return keyForward();                          // 骑乘时它可能被原版清零，退回按键绑定
+	}
+
+	@Override
+	public float inputStrafe() {
+		net.minecraft.client.entity.EntityPlayerSP p = Minecraft.getMinecraft().thePlayer;
+		if(p == null) return 0.0F;
+		float mv = p.movementInput.moveStrafe;
+		if(Math.abs(mv) > 0.01F) return mv;
+		return keyStrafe();
+	}
+
+	@Override
+	public boolean inputJump() {
+		net.minecraft.client.entity.EntityPlayerSP p = Minecraft.getMinecraft().thePlayer;
+		if(p == null) return false;
+		return p.movementInput.jump || Minecraft.getMinecraft().gameSettings.keyBindJump.getIsKeyPressed();
+	}
+
+	@Override
+	public float keyForward() {
+		net.minecraft.client.settings.GameSettings gs = Minecraft.getMinecraft().gameSettings;
+		if(Minecraft.getMinecraft().thePlayer == null) return 0.0F;
+		float f = 0.0F;
+		if(gs.keyBindForward.getIsKeyPressed()) f += 1.0F;
+		if(gs.keyBindBack.getIsKeyPressed()) f -= 1.0F;
+		return f;
+	}
+
+	@Override
+	public float keyStrafe() {
+		net.minecraft.client.settings.GameSettings gs = Minecraft.getMinecraft().gameSettings;
+		if(Minecraft.getMinecraft().thePlayer == null) return 0.0F;
+		float f = 0.0F;
+		if(gs.keyBindLeft.getIsKeyPressed()) f += 1.0F;
+		if(gs.keyBindRight.getIsKeyPressed()) f -= 1.0F;
+		return f;
+	}
+
+	@Override
+	public float rawMoveForward() {
+		net.minecraft.client.entity.EntityPlayerSP p = Minecraft.getMinecraft().thePlayer;
+		return p == null ? 0.0F : p.movementInput.moveForward;
+	}
+
+	/** 游戏内提示，省得每轮都去翻日志 */
+	@Override
+	public void notify(String msg) {
+		net.minecraft.client.entity.EntityPlayerSP p = Minecraft.getMinecraft().thePlayer;
+		if(p != null) p.addChatMessage(new net.minecraft.util.ChatComponentText(msg));
+	}
+
+	/**
+	 * 骑乘时客户端不走 sendMotionUpdates()，冲刺状态同步不到服务端，
+	 * 所以筋斗云的 Ctrl 加速要自己发一个包，只在状态变化时发。
+	 */
+	public static void syncJindouYunBoost(com.hbm.entity.misc.EntityJindouYun cloud) {
+
+		Minecraft mc = Minecraft.getMinecraft();
+		EntityPlayer player = mc.thePlayer;
+
+		if(player == null || cloud.riddenByEntity != player) return;
+
+		boolean boost = mc.gameSettings.keyBindSprint.getIsKeyPressed();
+
+		if(boost != cloud.boostSent) {
+			cloud.boostSent = boost;
+			PacketDispatcher.wrapper.sendToServer(new PacketJindouYunBoost(boost));
+		}
+	}
+
 	@Override
 	public void registerEntityRenderer() {
+		RenderingRegistry.registerEntityRenderingHandler(EntityJindouYun.class, new RenderJindouYun());
 		//projectiles
 		RenderingRegistry.registerEntityRenderingHandler(EntityBullet.class, new RenderRocket());
 		RenderingRegistry.registerEntityRenderingHandler(EntityBulletBaseNT.class, new RenderBullet());
@@ -706,6 +825,7 @@ public class ClientProxy extends ServerProxy {
 		RenderingRegistry.registerEntityRenderingHandler(EntityRagingVortex.class, new RenderBlackHole());
 		RenderingRegistry.registerEntityRenderingHandler(EntityQuasar.class, new RenderQuasar());
 		RenderingRegistry.registerEntityRenderingHandler(EntityDeathBlast.class, new RenderDeathBlast());
+		RenderingRegistry.registerEntityRenderingHandler(EntityPortal.class, new RenderPortal());
 		RenderingRegistry.registerEntityRenderingHandler(EntityOrbitalLaser.class, new RenderOrbitalLaser());
 		RenderingRegistry.registerEntityRenderingHandler(EntitySpear.class, new RenderSpear());
 		RenderingRegistry.registerEntityRenderingHandler(EntityNukeTorex.class, new RenderTorex());

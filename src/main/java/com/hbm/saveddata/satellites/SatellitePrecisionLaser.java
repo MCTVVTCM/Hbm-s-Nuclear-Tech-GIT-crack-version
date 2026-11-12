@@ -13,6 +13,7 @@ import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.util.ChatComponentTranslation;
 import net.minecraft.util.IChatComponent;
+import org.apache.logging.log4j.LogManager;
 import net.minecraft.world.World;
 
 public class SatellitePrecisionLaser extends SatelliteBase {
@@ -22,7 +23,7 @@ public class SatellitePrecisionLaser extends SatelliteBase {
 	public static final String CMD_SETENTITYTARGET = "setentitytarget";
 	
 	public static final int MAX_TARGET_RANGE = 1_000;
-	public static final int CHARGE_TIME = 5 * 20;
+	public static final int CHARGE_TIME = 0;
 	
 	public long lastShot;
 	public int targetedEntity = -1;
@@ -33,13 +34,14 @@ public class SatellitePrecisionLaser extends SatelliteBase {
 	
 	@Override
 	public IChatComponent[] getInfo(World world) {
-		
+		//control ground  station
 		boolean canFire = lastShot + CHARGE_TIME < world.getTotalWorldTime();
 		int cooldown = (int) ((lastShot + CHARGE_TIME) - world.getTotalWorldTime());
 		
 		return new IChatComponent[] {
 				new ChatComponentTranslation(ModItems.satellite.getUnlocalizedName(new ItemStack(ModItems.satellite, 1, EnumSatType.PRECISION_LASER.ordinal())) + ".name"),
-				canFire ? new ChatComponentTranslation("satellite.ready") : new ChatComponentTranslation("satellite.cooldown", cooldown / 20 + "s"),
+				canFire ? new ChatComponentTranslation("satellite.ready")
+						: new ChatComponentTranslation("satellite.cooldown", String.format(Locale.US, "%.1fs", cooldown / 20F)),
 		};
 	}
 	
@@ -103,23 +105,45 @@ public class SatellitePrecisionLaser extends SatelliteBase {
 
 	@Override
 	public void onCoordAction(World world, EntityPlayer player, int x, int y, int z) {
+		// 临时诊断
+		// LogManager.getLogger("HBM").info("precision-laser onCoordAction x=" + x + " y=" + y + " z=" + z + " remote=" + world.isRemote);
 		this.setTarget(x, z);
-		this.deathBlast(world, targetX, targetZ);
+		this.deathBlast(world, player, x, y, z);
 	}
-	
+
+	/** 没有明确 y（雷达/红石链路，y = -1）时退回地表。 */
 	public void deathBlast(World world, int x, int z) {
-		int y = world.getHeightValue(x, z);
-		deathBlast(world, x + 0.5, y, z + 0.5);
+		deathBlast(world, x, -1, z);
 	}
-	
+
+	public void deathBlast(World world, int x, int y, int z) {
+		deathBlast(world, null, x, y, z);
+	}
+
+	public void deathBlast(World world, EntityPlayer player, int x, int y, int z) {
+		if(y < 0 || y >= 256) y = world.getHeightValue(x, z);
+		deathBlast(world, player, x + 0.5, y + 0.5, z + 0.5);
+	}
+
 	public void deathBlast(World world, double x, double y, double z) {
+		deathBlast(world, null, x, y, z);
+	}
+
+	public void deathBlast(World world, EntityPlayer player, double x, double y, double z) {
+
+		// 临时诊断
+		// LogManager.getLogger("HBM").info("precision-laser deathBlast x=" + (int) x + " y=" + (int) y + " z=" + (int) z
+				// + " remote=" + world.isRemote
+				// + " cooldownOk=" + (lastShot + CHARGE_TIME < world.getTotalWorldTime()));
 
 		if(lastShot + CHARGE_TIME < world.getTotalWorldTime()) {
+		   // if( 1==1 ){
 			lastShot = world.getTotalWorldTime();
 			this.markDirty();
 
 			// deals 1,000 fucking damage
 			EntityOrbitalLaser blast = new EntityOrbitalLaser(world);
+			blast.owner = player;
 			blast.posX = x;
 			blast.posY = y;
 			blast.posZ = z;

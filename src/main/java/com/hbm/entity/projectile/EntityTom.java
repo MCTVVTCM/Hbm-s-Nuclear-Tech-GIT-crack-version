@@ -36,7 +36,7 @@ public class EntityTom extends EntityThrowable {
 				tom.posX = posX;
 				tom.posY = posY;
 				tom.posZ = posZ;
-				tom.destructionRange = 600;
+				tom.destructionRange = 600 * 2;
 				worldObj.spawnEntityInWorld(tom);
 
 				EntityCloudTom cloud = new EntityCloudTom(worldObj, 500);

@@ -396,6 +396,7 @@ public class NTMWorldGenerator implements IWorldGenerator {
 	@SubscribeEvent
 	public void generateStructures(PopulateChunkEvent.Pre event) {
 		hasPopulationEvent = true;
+		com.hbm.util.ChunkStats.generatedTotal++;
 
 		if(StructureConfig.enableStructures == 0) return;
 		if(StructureConfig.enableStructures == 2 && !event.world.getWorldInfo().isMapFeaturesEnabled()) return;

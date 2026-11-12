@@ -6,9 +6,12 @@ import com.hbm.items.ISatChip;
 import com.hbm.items.ItemEnumMulti;
 import com.hbm.util.i18n.I18nUtil;
 
+import cpw.mods.fml.relauncher.Side;
+import cpw.mods.fml.relauncher.SideOnly;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.item.ItemStack;
 import net.minecraft.util.EnumChatFormatting;
+import net.minecraft.util.IIcon;
 
 public class ItemSatellite extends ItemEnumMulti implements ISatChip {
 
@@ -33,6 +36,15 @@ public class ItemSatellite extends ItemEnumMulti implements ISatChip {
 		SCIENCE_SENSOR,
 		ASAT,
 		ASAT_AMMO,
+		/** 轨道区块挖掘机：清空一个区块的整列，方块按正常破坏掉落成物品 */
+		CHUNK_MINER,
+	}
+
+	@Override
+	@SideOnly(Side.CLIENT)
+	public IIcon getIconFromDamage(int meta) {
+		if(meta == EnumSatType.CHUNK_MINER.ordinal()) return super.getIconFromDamage(EnumSatType.PRECISION_LASER.ordinal());
+		return super.getIconFromDamage(meta);
 	}
 
 	@Override

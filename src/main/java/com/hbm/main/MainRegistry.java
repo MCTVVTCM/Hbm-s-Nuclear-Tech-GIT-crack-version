@@ -622,8 +622,22 @@ public class MainRegistry {
 
 		ModEventHandler commonHandler = new ModEventHandler();
 		FMLCommonHandler.instance().bus().register(commonHandler);
+
+		// 1.7.10 的 ChunkIOExecutor 默认只有 1 个 IO 线程（BASE_THREADS = 1），而且它的池用的是
+		// 无界队列，队列永远不满 → 线程数永远卡在 corePoolSize，扩不到 MaximumPoolSize。
+		// 唯一的开关就是 adjustPoolSize(players)，内部按 ceil(players / 50) 算线程数。
+		// 筋斗云的预取要靠这个池才真的并行读盘，否则就是主线程一根线程慢慢读。
+		try {
+			net.minecraftforge.common.chunkio.ChunkIOExecutor.adjustPoolSize(50 * 6);
+			logger.info("[chunkio] ChunkIOExecutor pool size set to 6");
+		} catch(Throwable t) {
+			logger.warn("[chunkio] failed to resize ChunkIOExecutor pool", t);
+		}
+		MinecraftForge.EVENT_BUS.register(new com.hbm.handler.PortalFallProtection());
+		com.hbm.handler.PortalFallProtection.registered = true;
 		MinecraftForge.EVENT_BUS.register(commonHandler);
 		MinecraftForge.TERRAIN_GEN_BUS.register(commonHandler);
+		FMLCommonHandler.instance().bus().register(new com.hbm.world.ChunkPathPreloader());
 		MinecraftForge.ORE_GEN_BUS.register(commonHandler);
 
 		ModEventHandlerImpact impactHandler = new ModEventHandlerImpact();
@@ -666,7 +680,15 @@ public class MainRegistry {
 		RBMKDials.createDials(world);
 		event.registerServerCommand(new CommandReloadRecipes());
 		event.registerServerCommand(new CommandDebugChunkLoad());
+		event.registerServerCommand(new com.hbm.commands.CommandChunkStats());
+		event.registerServerCommand(new com.hbm.commands.CommandBench());
+		event.registerServerCommand(new com.hbm.commands.CommandPendingTick());
+		event.registerServerCommand(new com.hbm.commands.CommandCull());
+		event.registerServerCommand(new com.hbm.commands.CommandAsyncBench());
 		event.registerServerCommand(new CommandSatellites());
+		event.registerServerCommand(new CommandClearItems());
+		event.registerServerCommand(new CommandTextLaser());
+		event.registerServerCommand(new CommandEntityStats());
 		event.registerServerCommand(new CommandRadiation());
 		event.registerServerCommand(new CommandPacketInfo());
 		event.registerServerCommand(new CommandReloadServer());

@@ -23,6 +23,21 @@ public class BlockAllocatorStandard implements IBlockAllocator {
 		this.resolution = resolution;
 	}
 
+	/**
+	 * 单格方块消耗多少能量才算被这颗射线打穿。默认就是方块的爆炸抗性。
+	 *
+	 * 想“对每个方块单独调伤害”就覆写这个方法：返回越大越难炸，返回 Float.MAX_VALUE 等于完全免疫
+	 * （射线会在这一格停下）。方法里拿得到方块、坐标和爆心，所以可以按方块类型、材质、高度甚至
+	 * 距离写规则。
+	 */
+	protected float getBlockResistance(ExplosionVNT explosion, World world, int blockX, int blockY, int blockZ,
+									   Block block, double originX, double originY, double originZ) {
+
+		return explosion.exploder != null
+				? explosion.exploder.func_145772_a(explosion.compat, world, blockX, blockY, blockZ, block)
+				: block.getExplosionResistance(explosion.exploder, world, blockX, blockY, blockZ, originX, originY, originZ);
+	}
+
 	@Override
 	public HashSet<ChunkPosition> allocate(ExplosionVNT explosion, World world, double x, double y, double z, float size) {
 
@@ -57,7 +72,7 @@ public class BlockAllocatorStandard implements IBlockAllocator {
 							Block block = world.getBlock(blockX, blockY, blockZ);
 
 							if(block.getMaterial() != Material.air) {
-								float blockResistance = explosion.exploder != null ? explosion.exploder.func_145772_a(explosion.compat, world, blockX, blockY, blockZ, block) : block.getExplosionResistance(explosion.exploder, world, blockX, blockY, blockZ, x, y, z);
+								float blockResistance = getBlockResistance(explosion, world, blockX, blockY, blockZ, block, x, y, z);
 								powerRemaining -= (blockResistance + 0.3F) * stepSize;
 							}
 

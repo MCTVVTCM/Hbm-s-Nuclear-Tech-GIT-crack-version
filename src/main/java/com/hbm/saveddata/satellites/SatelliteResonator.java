@@ -31,6 +31,7 @@ public class SatelliteResonator extends SatelliteBase {
 		player.mountEntity(null);
 		world.getChunkFromChunkCoords(x >> 4, z >> 4);
 		if(y < 0) y = world.getHeightValue(x, z);
+		else y += 1; // 指示器现在给的是被瞄准的方块本身，站到它上面一格
 		((EntityPlayerMP) player).playerNetServerHandler.setPlayerLocation(x + 0.5D, y, z + 0.5D, player.rotationYaw, player.rotationPitch);
 		world.playSoundEffect(player.posX, player.posY, player.posZ, "mob.endermen.portal", 1.0F, 1.0F);
 	}

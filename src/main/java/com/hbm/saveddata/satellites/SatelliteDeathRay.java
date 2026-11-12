@@ -3,8 +3,11 @@ package com.hbm.saveddata.satellites;
 import java.util.Locale;
 
 import com.hbm.entity.logic.EntityDeathBlast;
+import com.hbm.entity.logic.EntityOrbitalLaser;
 import com.hbm.items.ModItems;
 import com.hbm.items.special.ItemSatellite.EnumSatType;
+
+import org.apache.logging.log4j.LogManager;
 
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.item.ItemStack;
@@ -18,7 +21,7 @@ public class SatelliteDeathRay extends SatelliteBase {
 	public static final String CMD_FIRE = "fire";
 	public static final String CMD_CANFIRE = "canfire";
 	
-	public static final int CHARGE_TIME = 5 * 60 * 20;
+	public static final int CHARGE_TIME = 0 ;
 	
 	public long lastShot;
 	
@@ -69,23 +72,39 @@ public class SatelliteDeathRay extends SatelliteBase {
 	@Override
 	public void onCoordAction(World world, EntityPlayer player, int x, int y, int z) {
 		this.setTarget(x, z);
-		this.deathBlast(world, targetX, targetZ);
+		this.deathBlast(world, x, y, z);
 	}
-	
+
+	/** 没有明确 y（雷达/红石链路，y = -1）时退回地表。 */
 	public void deathBlast(World world, int x, int z) {
+		deathBlast(world, x, -1, z);
+	}
+
+	public void deathBlast(World world, int x, int y, int z) {
+		if(y < 0 || y >= 256) y = world.getHeightValue(x, z);
+
+		// 临时诊断：确认这个入口有没有被调用、是不是被冷却挡住、是不是跑在客户端
+		LogManager.getLogger("HBM").info("deathBlast() x=" + x + " z=" + z
+				+ " remote=" + world.isRemote
+				+ " cooldownOk=" + (lastShot + CHARGE_TIME < world.getTotalWorldTime())
+				+ " lastShot=" + lastShot + " now=" + world.getTotalWorldTime());
 
 		if(lastShot + CHARGE_TIME < world.getTotalWorldTime()) {
 			lastShot = world.getTotalWorldTime();
-			this.markDirty();
-
-			int y = world.getHeightValue(x, z);
+			// this.markDirty();
 
 			EntityDeathBlast blast = new EntityDeathBlast(world);
-			blast.posX = x;
+			blast.posX = x + 0.5;
 			blast.posY = y;
-			blast.posZ = z;
+			blast.posZ = z + 0.5;
 
 			world.spawnEntityInWorld(blast);
+
+			// 死光本身只有一下球形闪光，扫射时看不出"线"；补一根光柱，
+			// 和精密激光共用 RenderOrbitalLaser，连续开火时相邻光柱会叠成一片。
+			EntityOrbitalLaser beam = new EntityOrbitalLaser(world);
+			beam.setPosition(x + 0.5, y, z + 0.5);
+			world.spawnEntityInWorld(beam);
 		}
 	}
 }

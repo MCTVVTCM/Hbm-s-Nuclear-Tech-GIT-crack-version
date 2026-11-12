@@ -1,0 +1,12 @@
+// ---------------------------------------------------------------------------
+// 已废弃：内容合并进 build.gradle
+//
+// 以前 DCEVM / JDWP / 堆内存这些配置只写在 init script 里，必须 -I 才生效，
+// 直接 ./gradlew runClient -PdebugPort=5005 是不认的。
+// 现在 build.gradle 里统一处理，这里保留成空壳只是为了不破坏旧的命令行写法：
+//
+//   ./gradlew runClient --offline -PdebugPort=5005        # 直接这样就行
+//   ./devtools/run-client.sh -PdebugPort=5005             # 封装脚本也照旧
+//
+// 注意：这里不能再重复加 jvmArgs，否则 -agentlib:jdwp 会出现两次，第二个绑不上端口。
+// ---------------------------------------------------------------------------

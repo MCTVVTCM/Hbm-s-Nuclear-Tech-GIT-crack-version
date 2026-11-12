@@ -30,6 +30,10 @@ public class GeneralConfig {
 	public static boolean enableRenderDistCheck = true;
 	public static boolean enableSilentCompStackErrors = true;
 	public static boolean enableSkyboxes = true;
+	/** Momentum multiplier applied on every portal pass. 1.0 = perfectly conserved. */
+	public static double portalSpeedGain = 1.1D;
+	/** Extra velocity along the exit portal normal, so you get visibly spat out. 0 = pure conservation. */
+	public static double portalExitBoost = 0.0D;
 	public static boolean enableImpactWorldProvider = true;
 	public static boolean enableStatReRegistering = true;
 	public static boolean enableKeybindOverlap = true;
@@ -116,6 +120,8 @@ public class GeneralConfig {
 		enableSkyboxes = config.get(CATEGORY_GENERAL, "1.31_enableSkyboxes", true, "If enabled, will try to use NTM's custom skyboxes.").getBoolean(true);
 		enableImpactWorldProvider = config.get(CATEGORY_GENERAL, "1.32_enableImpactWorldProvider", true, "If enabled, registers custom world provider which modifies lighting and sky colors for post impact effects.").getBoolean(true);
 		enableStatReRegistering = config.get(CATEGORY_GENERAL, "1.33_enableStatReRegistering", true, "If enabled, will re-register item crafting/breaking/usage stats in order to fix a forge bug where modded items just won't show up.").getBoolean(true);
+		portalSpeedGain = CommonConfig.createConfigDouble(config, CATEGORY_GENERAL, "1.36_portalSpeedGain", "Momentum multiplier per portal pass. 1.0 keeps the speed exactly, >1 makes portal loops speed up (like falling through a loop forever).", 1.0);
+		portalExitBoost = CommonConfig.createConfigDouble(config, CATEGORY_GENERAL, "1.37_portalExitBoost", "Extra velocity (blocks/tick) along the exit portal normal, so you get thrown out of the portal. 0 = pure momentum conservation.", 0.0);
 		enableKeybindOverlap = config.get(CATEGORY_GENERAL, "1.34_enableKeybindOverlap", true, "If enabled, will handle keybinds that would otherwise be ignored due to overlapping.").getBoolean(true);
 		enableFluidContainerCompat = config.get(CATEGORY_GENERAL, "1.35_enableFluidContainerCompat", true, "If enabled, fluid containers will be oredicted and interchangable in recipes with other mods' containers, as well as TrainCraft's diesel being considered a valid diesel canister.").getBoolean(true);
 		enableMOTD = config.get(CATEGORY_GENERAL, "1.36_enableMOTD", true, "If enabled, shows the 'Loaded mod!' chat message as well as update notifications when joining a world").getBoolean(true);

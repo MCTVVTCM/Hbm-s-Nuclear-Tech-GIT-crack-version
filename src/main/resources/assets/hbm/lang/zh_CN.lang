@@ -6400,6 +6400,8 @@ item.satellite.detector.name=宽带无线电探测卫星
 item.satellite.miner_astro.name=小行星采矿飞船
 item.satellite.miner_lunar.name=月球采矿飞船
 item.satellite.precision_laser.name=轨道精确激光炮
+item.satellite.chunk_miner.name=轨道区块挖掘卫星
+satellite.excavating=正在挖掘：Y=%s，已挖 %s 格
 item.satellite.radar.name=雷达探测卫星
 item.satellite.ray_scan.name=窄带发射扫描卫星
 item.satellite.relay.name=中继卫星
@@ -6532,3 +6534,9 @@ chem.lightconstruction=航空级轻质结构
 chem.carboncarbon=航空级碳纤维板
 rock.crushing=粉碎%s
 tile.launchpad_soyuz.name=联盟号发射台
+
+item.jindouyun.name=筋斗云
+item.jindouyun.desc=右键上云，再右键收云。WASD 移动，空格上升，Shift 减速，Ctrl 加速。
+
+item.portal_gun.name=§2传送枪§r
+item.portal_gun.desc=右键射击墙面放置传送门，再右键另一处生成出口；蹲下右键关闭。

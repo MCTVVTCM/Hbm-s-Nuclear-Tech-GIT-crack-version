@@ -7,6 +7,7 @@ import com.hbm.saveddata.satellites.XSatelliteRegistry;
 import net.minecraft.command.CommandBase;
 import net.minecraft.command.ICommandSender;
 import net.minecraft.entity.player.EntityPlayer;
+import net.minecraft.item.ItemStack;
 import net.minecraft.util.ChatComponentTranslation;
 import net.minecraft.util.ChatComponentText;
 import net.minecraft.util.ChatStyle;
@@ -25,7 +26,7 @@ public class CommandSatellites extends CommandBase {
 
 	@Override
 	public String getCommandUsage(ICommandSender iCommandSender) {
-		return String.format(Locale.US, "%s/%s orbit %s- Launch the held satellite.\n" + "%s/%s descend <frequency> %s- Deletes satellite by frequency.\n" + "%s/%s list %s- Lists all active satellites.", EnumChatFormatting.GREEN, getCommandName(), EnumChatFormatting.LIGHT_PURPLE, EnumChatFormatting.GREEN, getCommandName(), EnumChatFormatting.LIGHT_PURPLE, EnumChatFormatting.GREEN, getCommandName(), EnumChatFormatting.LIGHT_PURPLE);
+		return String.format(Locale.US, "%s/%s orbit %s- Launch the held satellite.\n" + "%s/%s descend <frequency> %s- Deletes satellite by frequency.\n" + "%s/%s list %s- Lists all active satellites.\n" + "%s/%s give <frequency> [designator|coord] %s- Gives a sat chip pre-linked to that frequency.", EnumChatFormatting.GREEN, getCommandName(), EnumChatFormatting.LIGHT_PURPLE, EnumChatFormatting.GREEN, getCommandName(), EnumChatFormatting.LIGHT_PURPLE, EnumChatFormatting.GREEN, getCommandName(), EnumChatFormatting.LIGHT_PURPLE, EnumChatFormatting.GREEN, getCommandName(), EnumChatFormatting.LIGHT_PURPLE);
 	}
 
 	@Override
@@ -56,6 +57,25 @@ public class CommandSatellites extends CommandBase {
 				sender.addChatMessage(new ChatComponentTranslation("commands.satellite.no_satellite").setChatStyle(new ChatStyle().setColor(EnumChatFormatting.RED)));
 			}
 			break;
+		case "give":
+			if(args.length < 2) {
+				sender.addChatMessage(new ChatComponentText("Usage: /" + getCommandName() + " give <frequency> [designator|coord]").setChatStyle(new ChatStyle().setColor(EnumChatFormatting.RED)));
+				break;
+			}
+
+			int freqToGive = parseInt(sender, args[1]);
+			String itemKind = args.length > 2 ? args[2].toLowerCase(Locale.US) : "designator";
+			ItemStack chip = new ItemStack("coord".equals(itemKind) ? ModItems.sat_coord : ModItems.sat_designator);
+			ISatChip.setFreqS(chip, freqToGive);
+
+			EntityPlayer recipient = getCommandSenderAsPlayer(sender);
+			if(!recipient.inventory.addItemStackToInventory(chip)) recipient.dropPlayerItemWithRandomChoice(chip, false);
+
+			boolean onOrbit = SatelliteSavedData.getData(sender.getEntityWorld()).sats.containsKey(freqToGive);
+			sender.addChatMessage(new ChatComponentText("Gave " + itemKind + " with frequency " + freqToGive
+					+ (onOrbit ? "" : " (no satellite is currently orbiting on this frequency)"))
+					.setChatStyle(new ChatStyle().setColor(onOrbit ? EnumChatFormatting.GREEN : EnumChatFormatting.YELLOW)));
+			break;
 		case "list":
 			data = SatelliteSavedData.getData(sender.getEntityWorld());
 			if(data.sats.isEmpty()) {
@@ -85,10 +105,13 @@ public class CommandSatellites extends CommandBase {
 			return Collections.emptyList();
 		}
 		if(args.length == 1) {
-			return getListOfStringsMatchingLastWord(args, "orbit", "descend", "list");
+			return getListOfStringsMatchingLastWord(args, "orbit", "descend", "list", "give");
 		}
-		if(args[0].equals("descend")) {
+		if(args[0].equals("descend") || args[0].equals("give")) {
 			return getListOfStringsFromIterableMatchingLastWord(args, SatelliteSavedData.getData(sender.getEntityWorld()).sats.keySet().stream().map(String::valueOf).collect(Collectors.toList()));
+		}
+		if(args[0].equals("give") && args.length == 3) {
+			return getListOfStringsMatchingLastWord(args, "designator", "coord");
 		}
 		return Collections.emptyList();
 	}
