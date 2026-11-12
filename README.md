@@ -48,7 +48,8 @@
 soyuzLauncher dont need wait launch time now,and SatellitePrecisionLaser and EntityDeathBlast removed charing time and imporved blast range and damage.let's see are these changes are your loving things>_<?.<br>
 顺带做了一些优化,现在筋斗云开最快(**1500m/s!!**)卡顿也可以接受了,不过还是有一些bug.but whatever,who cared?it just run.<br>
 add a hud so you can see your speed,mspt,tps now<br>
-and i also optimized saving world time and load chuck function,it's why jindouyun's fast speed mode is useable,i think whatever you are playing vanilla or hyper version this will be a special experience,but of course it's not same as Distant Horizons or other optimization mod.
+and i also optimized saving world time and load chuck function,it's why jindouyun's fast speed mode is useable,i think whatever you are playing vanilla or hyper version this will be a special experience,but of course it's not same as Distant Horizons or other optimization mod.<br>
+最重要的更新!!添加了`/ntmsatellites give` command,so you can get back your lost stallite now but without complex terminal command process.actually,that terminal is bad,it even cant remenber what command you type in at last.how to use?just use `/ntmsatellite list` get id of satellite,and command `/ntmsatellites give <id>`,how simple!
 
 ![whynopicturehere](docs/001.png)
 
